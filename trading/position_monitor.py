@@ -9,6 +9,8 @@
 5. 破位止损：跌破入场价50%，清仓（保残值，不归零）
 """
 import asyncio
+import json
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -18,7 +20,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-PRICE_CHECK_INTERVAL = 10  # 每 10 秒查一次价格
+PRICE_CHECK_INTERVAL = 20  # 每 20 秒查一次价格（避免 429）
 
 # ── 止盈阶梯 ─────────────────────────────────────────────
 # (倍数阈值, 卖出百分比, 描述)
@@ -85,6 +87,43 @@ class PositionMonitor:
             "仓位已记录 ca=%s entry_price=$%.8f chain=%s",
             position.token_address, position.entry_price, position.chain,
         )
+        self.save_positions()
+
+    async def recover_from_wallet(self, wallet_address: str, chain: str) -> None:
+        """启动时从链上查询钱包持仓，恢复未关闭的仓位"""
+        try:
+            holdings = await client.wallet_holdings(wallet_address, chain)
+            if not holdings:
+                logger.info("钱包无代币持仓，无需恢复")
+                return
+            known_cas = {p.token_address for p in self._positions}
+            recovered = 0
+            for h in holdings:
+                ca = h.get("tokenAddress") or h.get("address") or ""
+                if not ca or ca in known_cas:
+                    continue
+                # 查询当前价格作为"入场价"（保守估计，用于止损判断）
+                try:
+                    data = await client.query_token(ca, chain)
+                    trade_info = (data or {}).get("tradeInfo") or {} if isinstance(data, dict) else {}
+                    price = float(trade_info.get("price", 0) or 0)
+                except Exception:
+                    price = 0.0
+                if price <= 0:
+                    continue
+                pos = Position(
+                    chain=chain,
+                    token_address=ca,
+                    wallet_address=wallet_address,
+                    entry_price=price,
+                    tip=config.tip,
+                )
+                self._positions.append(pos)
+                recovered += 1
+                logger.info("恢复持仓 ca=%s price=$%.8f", ca, price)
+            logger.info("从钱包恢复了 %d 个持仓", recovered)
+        except Exception as e:
+            logger.error("恢复持仓失败: %s", e)
 
     async def start(self) -> None:
         self._running = True
@@ -315,8 +354,8 @@ class PositionMonitor:
             )
             # 记录亏损到安全护栏（仅在亏损时）
             if self._safety and "止损" in reason:
-                # 粗估亏损：入场价对应的投入（按比例）
-                self._safety.record_loss(0.05)  # 保守估算每笔亏损
+                self._safety.record_loss(0.05)
+            self.save_positions()
             return True
         else:
             logger.error(
@@ -324,6 +363,64 @@ class PositionMonitor:
                 reason, pos.token_address, tx_id, raw_status,
             )
             return False
+
+    # ── 持仓持久化 ─────────────────────────────────────
+
+    SAVE_FILE = "positions.json"
+
+    def save_positions(self) -> None:
+        """保存持仓到文件，重启后可恢复"""
+        data = []
+        for p in self._positions:
+            if p.status == "closed":
+                continue
+            data.append({
+                "chain": p.chain,
+                "token_address": p.token_address,
+                "wallet_address": p.wallet_address,
+                "entry_price": p.entry_price,
+                "tip": p.tip,
+                "status": p.status,
+                "tp_level": p.tp_level,
+                "highest_price": p.highest_price,
+                "trailing_active": p.trailing_active,
+                "entry_time": p.entry_time,
+            })
+        with open(self.SAVE_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        logger.debug("持仓已保存到 %s (%d 个)", self.SAVE_FILE, len(data))
+
+    def load_positions(self) -> int:
+        """从文件恢复持仓，返回恢复数量"""
+        if not os.path.exists(self.SAVE_FILE):
+            return 0
+        try:
+            with open(self.SAVE_FILE) as f:
+                data = json.load(f)
+            known = {p.token_address for p in self._positions}
+            count = 0
+            for d in data:
+                if d["token_address"] in known:
+                    continue
+                pos = Position(
+                    chain=d["chain"],
+                    token_address=d["token_address"],
+                    wallet_address=d["wallet_address"],
+                    entry_price=d["entry_price"],
+                    tip=d.get("tip", config.tip),
+                    status=d.get("status", "open"),
+                    tp_level=d.get("tp_level", 0),
+                    highest_price=d.get("highest_price", 0.0),
+                    trailing_active=d.get("trailing_active", False),
+                    entry_time=d.get("entry_time", time.time()),
+                )
+                self._positions.append(pos)
+                count += 1
+                logger.info("恢复持仓 ca=%s entry=$%.8f status=%s", pos.token_address, pos.entry_price, pos.status)
+            return count
+        except Exception as e:
+            logger.error("加载持仓文件失败: %s", e)
+            return 0
 
     @property
     def positions(self) -> list[Position]:

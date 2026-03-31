@@ -60,6 +60,13 @@ class TradingEngine:
 
         is_buy = signal.action == "buy"
 
+        # 去重：已持仓的不再买入
+        if is_buy:
+            held = {p.token_address for p in self.position_monitor.positions if p.status != "closed"}
+            if signal.token_address in held:
+                logger.info("已持仓，跳过重复买入 ca=%s", signal.token_address)
+                return None
+
         # 买入前先做全面分析 + 分档投入
         if is_buy:
             analysis = await self.analyzer.analyze(signal.token_address, signal.chain)

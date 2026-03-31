@@ -55,7 +55,7 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     tasks = []
 
     # Feed 扫描（SOL 新币，仅 AI 相关）
-    feed = FeedScanner(chain=config.default_chain, feed_type="NEW", ai_only=True)
+    feed = FeedScanner(chain=config.default_chain, feed_type="NEW", ai_only=True, interval=15)
     tasks.append(asyncio.create_task(feed.start(handle)))
 
     # AI 热点信号源
@@ -64,11 +64,15 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
 
     # 仓位监控（止盈）+ 策略报告
     if not dry_run:
+        # 启动前先恢复已有持仓（文件 > 链上）
+        loaded = engine.position_monitor.load_positions()
+        if loaded == 0:
+            await engine.position_monitor.recover_from_wallet(engine.wallet_address, config.default_chain)
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
         tasks.append(asyncio.create_task(reporter.start()))
 
     # Meme 趋势扫描（Reddit / TikTok / 链上匹配）
-    meme_scanner = SocialTrendScanner(chain=config.default_chain)
+    meme_scanner = SocialTrendScanner(chain=config.default_chain, feed_interval=30)
     tasks.append(asyncio.create_task(meme_scanner.start(handle)))
 
     # 名人推文 + KOL 跟单监控（内置名人列表 + 自定义账号）

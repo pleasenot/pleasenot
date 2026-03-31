@@ -364,7 +364,10 @@ class TokenAnalyzer:
             f"+{bonus} AI研判: {verdict} (AI评分{ai_score}/100) — {reason}"
         )
 
-        # AI 强烈不推荐时扣分
-        if ai_score < 20 and verdict == "SKIP":
+        # AI 判定 SKIP 且分数极低 → 一票否决（防止垃圾币蒙混过关）
+        # 注意：阈值不能太高，AI 可能不了解最新热点（如 Capybara=Claude代号）
+        if verdict == "SKIP" and ai_score < 15:
+            result.fatal.append(f"AI一票否决: 叙事不过关(AI评分{ai_score}/100) — {reason}")
+        elif ai_score < 20:
             result.score -= 10
             result.reasons.append(f"-10 AI强烈不推荐")
