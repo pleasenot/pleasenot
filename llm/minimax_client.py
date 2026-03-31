@@ -100,7 +100,7 @@ class MiniMaxClient:
                             {"role": "system", "content": SYSTEM_PROMPT},
                             {"role": "user", "content": user_msg},
                         ],
-                        "max_completion_tokens": 200,
+                        "max_completion_tokens": 500,
                         "temperature": 0.5,
                     },
                 )

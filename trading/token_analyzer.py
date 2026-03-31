@@ -59,20 +59,21 @@ class TokenAnalyzer:
             result.fatal.append("返回数据无效")
             return result
 
-        # 提取各层数据
+        # 提取各层数据（适配 XXYY 实际返回字段名）
         trade_info = data.get("tradeInfo") or {}
-        security = data.get("security") or {}
-        holder_info = data.get("holderInfo") or {}
-        socials = data.get("socials") or {}
+        security_info = data.get("securityInfo") or {}
+        pair_info = data.get("pairInfo") or {}
+        link_info = data.get("linkInfo") or {}
+        dev_info = data.get("dev") or {}
 
         # ── 1. 安全性检查（一票否决 + 扣分）──────────────
-        self._check_security(security, trade_info, result)
+        self._check_security(security_info, trade_info, result)
 
         # ── 2. 筹码分布 ─────────────────────────────────
-        self._check_holders(holder_info, security, result)
+        self._check_holders(trade_info, dev_info, data, result)
 
         # ── 3. 流动性 ───────────────────────────────────
-        self._check_liquidity(trade_info, result)
+        self._check_liquidity(pair_info, result)
 
         # ── 4. 市值定位 ─────────────────────────────────
         self._check_market_cap(trade_info, result)
@@ -81,13 +82,13 @@ class TokenAnalyzer:
         self._check_volume(trade_info, result)
 
         # ── 6. 社交信号 ─────────────────────────────────
-        self._check_socials(socials, data, result)
+        self._check_socials(link_info, data, result)
 
         # ── 7. 聪明钱信号 ───────────────────────────────
         await self._check_smart_money(token_address, chain, result)
 
         # ── 8. AI 智能研判（MiniMax）─────────────────────
-        await self._check_ai_verdict(data, socials, result)
+        await self._check_ai_verdict(data, link_info, result)
 
         # 有一票否决项直接不过
         if result.fatal:
@@ -103,39 +104,43 @@ class TokenAnalyzer:
 
     # ── 安全性 ──────────────────────────────────────────────
 
-    def _check_security(self, security: dict, trade_info: dict, result: AnalysisResult) -> None:
-        # 蜜罐检测
-        is_honeypot = security.get("isHoneypot")
-        if is_honeypot:
-            result.fatal.append("蜜罐代币")
-            return
+    def _check_security(self, security_info: dict, trade_info: dict, result: AnalysisResult) -> None:
+        """
+        securityInfo 实际字段: locked, noMint, noFreeze
+        """
+        # noMint + noFreeze = 相当于 renounced（无法增发、无法冻结）
+        no_mint = security_info.get("noMint", False)
+        no_freeze = security_info.get("noFreeze", False)
+        locked = security_info.get("locked", False)
 
-        # 合约权限是否放弃（renounced）
-        is_renounced = security.get("renounced")
-        if is_renounced:
+        if no_mint and no_freeze:
             result.score += 15
-            result.reasons.append("+15 合约已放弃权限(renounced)")
+            result.reasons.append("+15 合约安全(noMint+noFreeze)")
+        elif no_mint or no_freeze:
+            result.score += 8
+            reasons = []
+            if no_mint:
+                reasons.append("noMint")
+            if no_freeze:
+                reasons.append("noFreeze")
+            result.reasons.append(f"+8 合约部分安全({'+'.join(reasons)})")
         else:
             result.score += 0
             result.reasons.append("+0 合约未放弃权限，有 rug 风险")
 
-        # 买卖税率
-        buy_tax = float(security.get("buyTax", 0) or 0)
-        sell_tax = float(security.get("sellTax", 0) or 0)
-        if buy_tax > 10 or sell_tax > 10:
-            result.fatal.append(f"税率过高 buy={buy_tax}% sell={sell_tax}%")
-            return
-        elif buy_tax <= 2 and sell_tax <= 2:
-            result.score += 10
-            result.reasons.append(f"+10 税率低 buy={buy_tax}% sell={sell_tax}%")
-        else:
+        if locked:
             result.score += 5
-            result.reasons.append(f"+5 税率一般 buy={buy_tax}% sell={sell_tax}%")
+            result.reasons.append("+5 流动性已锁定")
 
     # ── 筹码分布 ────────────────────────────────────────────
 
-    def _check_holders(self, holder_info: dict, security: dict, result: AnalysisResult) -> None:
-        holders = int(holder_info.get("holders", 0) or security.get("holders", 0) or 0)
+    def _check_holders(self, trade_info: dict, dev_info: dict, data: dict, result: AnalysisResult) -> None:
+        """
+        tradeInfo.holder = 持仓人数
+        dev.pct = Dev 持仓百分比
+        topHolderPct = Top10 集中度
+        """
+        holders = int(trade_info.get("holder", 0) or 0)
 
         if holders >= 200:
             result.score += 15
@@ -151,7 +156,7 @@ class TokenAnalyzer:
             result.reasons.append(f"-5 持仓人太少({holders})")
 
         # Dev 持仓
-        dev_hp = float(security.get("devHoldPercent", 0) or 0)
+        dev_hp = float(dev_info.get("pct", 0) or 0)
         if dev_hp > 30:
             result.fatal.append(f"Dev 持仓过高({dev_hp:.1f}%)")
         elif dev_hp > 15:
@@ -165,7 +170,7 @@ class TokenAnalyzer:
             result.reasons.append(f"+10 Dev 持仓低({dev_hp:.1f}%)")
 
         # Top10 集中度
-        top10_hp = float(security.get("top10HoldPercent", 0) or holder_info.get("top10Percent", 0) or 0)
+        top10_hp = float(data.get("topHolderPct", 0) or 0)
         if top10_hp > 60:
             result.score -= 5
             result.reasons.append(f"-5 Top10 集中度过高({top10_hp:.1f}%)")
@@ -178,8 +183,8 @@ class TokenAnalyzer:
 
     # ── 流动性 ──────────────────────────────────────────────
 
-    def _check_liquidity(self, trade_info: dict, result: AnalysisResult) -> None:
-        liquidity = float(trade_info.get("liquidity", 0) or trade_info.get("liquidityUSD", 0) or 0)
+    def _check_liquidity(self, pair_info: dict, result: AnalysisResult) -> None:
+        liquidity = float(pair_info.get("liquidateUsd", 0) or pair_info.get("liquidity", 0) or 0)
 
         if liquidity >= 50000:
             result.score += 15
@@ -197,7 +202,7 @@ class TokenAnalyzer:
     # ── 市值定位 ────────────────────────────────────────────
 
     def _check_market_cap(self, trade_info: dict, result: AnalysisResult) -> None:
-        mc = float(trade_info.get("marketCapUSD", 0) or trade_info.get("mc", 0) or 0)
+        mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
 
         # 早期介入甜区：$10k - $500k
         if 10_000 <= mc <= 100_000:
@@ -219,39 +224,29 @@ class TokenAnalyzer:
     # ── 交易热度 ────────────────────────────────────────────
 
     def _check_volume(self, trade_info: dict, result: AnalysisResult) -> None:
-        vol_24h = float(trade_info.get("volume24h", 0) or trade_info.get("vol24h", 0) or 0)
-        buys = int(trade_info.get("buys24h", 0) or trade_info.get("buys", 0) or 0)
-        sells = int(trade_info.get("sells24h", 0) or trade_info.get("sells", 0) or 0)
+        """tradeInfo: hourTradeVolume(1h成交额), hourTradeNum(1h交易笔数)"""
+        vol = float(trade_info.get("hourTradeVolume", 0) or trade_info.get("volume24h", 0) or 0)
+        trade_num = int(trade_info.get("hourTradeNum", 0) or 0)
 
-        if vol_24h >= 50000:
+        if vol >= 50000:
             result.score += 10
-            result.reasons.append(f"+10 24h成交量活跃(${vol_24h:,.0f})")
-        elif vol_24h >= 10000:
+            result.reasons.append(f"+10 成交量活跃(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 10000:
             result.score += 5
-            result.reasons.append(f"+5 24h成交量一般(${vol_24h:,.0f})")
+            result.reasons.append(f"+5 成交量一般(${vol:,.0f}, {trade_num}笔)")
         else:
             result.score += 0
-            result.reasons.append(f"+0 24h成交量低(${vol_24h:,.0f})")
-
-        # 买卖比：买多于卖是积极信号
-        total_txs = buys + sells
-        if total_txs > 0:
-            buy_ratio = buys / total_txs
-            if buy_ratio >= 0.6:
-                result.score += 5
-                result.reasons.append(f"+5 买盘强势(买{buys}/卖{sells}={buy_ratio:.0%})")
-            elif buy_ratio <= 0.35:
-                result.score -= 5
-                result.reasons.append(f"-5 卖盘压力大(买{buys}/卖{sells}={buy_ratio:.0%})")
+            result.reasons.append(f"+0 成交量低(${vol:,.0f}, {trade_num}笔)")
 
     # ── 社交信号 ────────────────────────────────────────────
 
-    def _check_socials(self, socials: dict, data: dict, result: AnalysisResult) -> None:
+    def _check_socials(self, link_info: dict, data: dict, result: AnalysisResult) -> None:
+        """linkInfo 实际字段: web, x, tg"""
         social_count = 0
 
-        has_website = bool(socials.get("website") or data.get("website"))
-        has_twitter = bool(socials.get("twitter") or data.get("twitter"))
-        has_telegram = bool(socials.get("telegram") or data.get("telegram"))
+        has_website = bool(link_info.get("web"))
+        has_twitter = bool(link_info.get("x"))
+        has_telegram = bool(link_info.get("tg"))
 
         if has_website:
             social_count += 1
@@ -262,13 +257,13 @@ class TokenAnalyzer:
 
         if social_count >= 3:
             result.score += 10
-            result.reasons.append(f"+10 社交齐全(官网+Twitter+TG)")
+            result.reasons.append("+10 社交齐全(官网+Twitter+TG)")
         elif social_count >= 2:
             result.score += 5
             result.reasons.append(f"+5 有{social_count}个社交渠道")
         elif social_count == 1:
             result.score += 2
-            result.reasons.append(f"+2 仅有1个社交渠道")
+            result.reasons.append("+2 仅有1个社交渠道")
         else:
             result.score += 0
             result.reasons.append("+0 无社交信息")
@@ -326,7 +321,7 @@ class TokenAnalyzer:
 
     # ── AI 智能研判（MiniMax）───────────────────────────────
 
-    async def _check_ai_verdict(self, data: dict, socials: dict, result: AnalysisResult) -> None:
+    async def _check_ai_verdict(self, data: dict, link_info: dict, result: AnalysisResult) -> None:
         """
         用 MiniMax 大模型分析代币叙事质量。
         AI 判断这个币是蹭了真实热点还是纯垃圾。
@@ -336,11 +331,16 @@ class TokenAnalyzer:
             return
 
         trade_info = data.get("tradeInfo") or {}
-        name = data.get("name") or data.get("tokenName", "")
-        symbol = data.get("symbol", "")
+        name = data.get("baseSymbol") or data.get("name", "")
+        symbol = data.get("baseSymbol") or data.get("symbol", "")
         description = data.get("description", "")
-        mc = float(trade_info.get("marketCapUSD", 0) or 0)
-        holders = int(data.get("holders", 0) or 0)
+        mc = float(trade_info.get("marketCapUsd", 0) or 0)
+        holders = int(trade_info.get("holder", 0) or 0)
+
+        # 补充 launch 平台信息
+        launch = data.get("launchPlatform") or {}
+        if launch.get("name"):
+            description += f" | 发射平台: {launch['name']} 进度: {launch.get('progress', '?')}%"
 
         ai_result = await minimax.analyze_token(
             name=name,
@@ -348,9 +348,9 @@ class TokenAnalyzer:
             description=description,
             market_cap=mc,
             holders=holders,
-            has_website=bool(socials.get("website") or data.get("website")),
-            has_twitter=bool(socials.get("twitter") or data.get("twitter")),
-            has_telegram=bool(socials.get("telegram") or data.get("telegram")),
+            has_website=bool(link_info.get("web")),
+            has_twitter=bool(link_info.get("x")),
+            has_telegram=bool(link_info.get("tg")),
         )
 
         ai_score = ai_result.get("score", 0)
