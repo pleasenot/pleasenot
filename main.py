@@ -14,6 +14,7 @@ from xxyy.client import client
 from signals.feed_scanner import FeedScanner
 from signals.ai_trending_scanner import AiTrendingScanner
 from signals.twitter_scanner import TwitterScanner
+from signals.social_trend_scanner import SocialTrendScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
 from utils.logger import get_logger
@@ -56,6 +57,10 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     # 仓位监控（止盈）
     if not dry_run:
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
+
+    # Meme 趋势扫描（Reddit / TikTok / 链上匹配）
+    meme_scanner = SocialTrendScanner(chain=config.default_chain)
+    tasks.append(asyncio.create_task(meme_scanner.start(handle)))
 
     # 名人推文 + KOL 跟单监控（内置名人列表 + 自定义账号）
     if not feed_only:

@@ -35,6 +35,9 @@ class Config:
     # Twitter API Bearer Token（用于推文监控，可选）
     twitter_bearer_token: str = field(default_factory=lambda: os.getenv("TWITTER_BEARER_TOKEN", ""))
 
+    # TikTok 趋势 API Key（可选，用于 meme 趋势扫描）
+    tiktok_api_key: str = field(default_factory=lambda: os.getenv("TIKTOK_API_KEY", ""))
+
     # Twitter 额外监控账号（逗号分隔，会与内置名人列表合并）
     twitter_accounts: list[str] = field(default_factory=lambda: [
         a.strip() for a in os.getenv("TWITTER_ACCOUNTS", "").split(",") if a.strip()
