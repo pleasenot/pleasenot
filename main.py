@@ -12,6 +12,7 @@ import argparse
 from config import config
 from xxyy.client import client
 from signals.feed_scanner import FeedScanner
+from signals.ai_trending_scanner import AiTrendingScanner
 from signals.twitter_scanner import TwitterScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
@@ -44,9 +45,13 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
 
     tasks = []
 
-    # Feed 扫描（SOL 新币）
-    feed = FeedScanner(chain=config.default_chain, feed_type="NEW")
+    # Feed 扫描（SOL 新币，仅 AI 相关）
+    feed = FeedScanner(chain=config.default_chain, feed_type="NEW", ai_only=True)
     tasks.append(asyncio.create_task(feed.start(handle)))
+
+    # AI 热点信号源
+    ai_trending = AiTrendingScanner(chain=config.default_chain)
+    tasks.append(asyncio.create_task(ai_trending.start(handle)))
 
     # 仓位监控（止盈）
     if not dry_run:

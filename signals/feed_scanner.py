@@ -3,6 +3,7 @@ import asyncio
 from typing import Callable
 
 from signals.base import BaseSignalSource, TradeSignal
+from signals.ai_keywords import is_ai_related
 from xxyy.client import client
 from config import config
 from utils.logger import get_logger
@@ -31,12 +32,14 @@ class FeedScanner(BaseSignalSource):
         filters: dict | None = None,
         interval: int | None = None,
         max_signals_per_cycle: int = 1,
+        ai_only: bool = True,
     ):
         self.chain = chain or config.default_chain
         self.feed_type = feed_type
         self.filters = {**DEFAULT_FILTERS, **(filters or {})}
         self.interval = interval or config.feed_interval
         self.max_signals_per_cycle = max_signals_per_cycle
+        self.ai_only = ai_only
         self._seen: set[str] = set()
 
     def _is_safe(self, token: dict) -> tuple[bool, str]:
@@ -79,6 +82,16 @@ class FeedScanner(BaseSignalSource):
                     if not safe:
                         logger.debug("skip ca=%s reason=%s", ca, reason)
                         continue
+
+                    if self.ai_only:
+                        name = token.get("name", "")
+                        symbol = token.get("symbol", "")
+                        desc = token.get("description", "")
+                        matched, keyword = is_ai_related(name, symbol, desc)
+                        if not matched:
+                            logger.debug("skip non-AI ca=%s symbol=%s", ca, symbol)
+                            continue
+                        logger.info("AI match ca=%s symbol=%s keyword=%s", ca, symbol, keyword)
 
                     symbol = token.get("symbol", "?")
                     mc = token.get("marketCapUSD", 0)

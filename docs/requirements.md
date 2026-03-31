@@ -20,7 +20,7 @@
 |------|------|------|
 | XXYY Feed 新币扫描 | ✅ 已实现 | 扫描 pump.fun 等平台新发代币 |
 | XXYY KOL 买入列表 | 🔲 待接入 | 跟单 KOL 钱包买入行为 |
-| XXYY AI 信号列表 | 🔲 待接入 | open-ai-trending 信号 |
+| XXYY AI 信号列表 | ✅ 已实现 | open-ai-trending 信号 |
 | Twitter/X 账号监控 | 🔲 占位 | 监控指定账号推文，提取合约地址 |
 
 ---
@@ -61,6 +61,7 @@
 
 - [ ] 充值 SOL，验证真实买入流程
 - [ ] 接入 KOL 买入 / AI 信号作为信号源
-- [ ] 实现止盈止损逻辑
+- [x] Feed 扫描加入 AI 关键词过滤，仅买入 AI 相关 meme coin
+- [x] 接入 XXYY AI 热点信号源（open-ai-trending）
 - [ ] 完善 Feed 过滤条件
 - [ ] 接入 Twitter API 监控指定账号

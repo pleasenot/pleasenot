@@ -107,6 +107,17 @@ class XxyyClient:
                 await asyncio.sleep(interval)
         return result
 
+    # ── AI 信号 ───────────────────────────────────────────
+
+    async def ai_trending(self, chain: str = "sol") -> list[dict]:
+        """获取 AI 热点代币列表（open-ai-trending）"""
+        result = await self._get("/open-ai-trending", chain=chain)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
+
     # ── Feed 扫描 ─────────────────────────────────────────
 
     async def feed(self, feed_type: str = "NEW", chain: str = "sol", filters: dict | None = None) -> list[dict]:
