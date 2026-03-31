@@ -19,6 +19,9 @@ class TradeRecord:
     tx_id: str
     status: str = "pending"   # pending | success | failed
     result: dict = field(default_factory=dict)
+    score: int = 0             # 分析评分
+    tier: str = ""             # 分档: 顶级/人上人/NPC
+    buy_amount: float = 0.0    # 实际买入金额
 
 
 class TradingEngine:
@@ -39,6 +42,7 @@ class TradingEngine:
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
         self.position_monitor = PositionMonitor()
         self.analyzer = TokenAnalyzer()
+        self.reporter = None  # 由 main.py 注入
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后执行交易，返回交易记录"""
@@ -59,7 +63,11 @@ class TradingEngine:
             logger.info("分析结果:\n%s", analysis.summary())
             if not analysis.passed:
                 logger.info("分析未通过，跳过买入 ca=%s score=%d", signal.token_address, analysis.score)
+                if self.reporter:
+                    self.reporter.record_signal(signal.source, passed=False, score=analysis.score)
                 return None
+            if self.reporter:
+                self.reporter.record_signal(signal.source, passed=True, score=analysis.score)
 
         if is_buy:
             amount = self._calc_buy_amount(analysis.score)
@@ -80,7 +88,10 @@ class TradingEngine:
             logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)
             return None
 
-        record = TradeRecord(signal=signal, tx_id=tx_id)
+        record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
+        if is_buy:
+            record.score = analysis.score
+            record.tier = self._get_tier_name(analysis.score)
         self._history.append(record)
 
         # 异步轮询结果，不阻塞主循环
@@ -157,6 +168,12 @@ class TradingEngine:
                 )
                 return amount
         return self.buy_amount
+
+    def _get_tier_name(self, score: int) -> str:
+        for min_score, _, tier_name in self.TIERS:
+            if score >= min_score:
+                return tier_name
+        return "拉跨"
 
     @property
     def history(self) -> list[TradeRecord]:

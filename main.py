@@ -17,6 +17,7 @@ from signals.twitter_scanner import TwitterScanner
 from signals.social_trend_scanner import SocialTrendScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
+from trading.strategy_report import StrategyReporter
 from utils.logger import get_logger
 
 logger = get_logger("main")
@@ -40,6 +41,10 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
 
     engine = TradingEngine(on_result=on_trade_result)
 
+    # 策略报告（测试时60秒出一份，正式运行可改为300秒）
+    reporter = StrategyReporter(engine, interval=60)
+    engine.reporter = reporter
+
     async def handle(signal: TradeSignal) -> None:
         if dry_run:
             logger.info("[DRY-RUN] 信号 action=%s ca=%s chain=%s source=%s",
@@ -57,9 +62,10 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     ai_trending = AiTrendingScanner(chain=config.default_chain)
     tasks.append(asyncio.create_task(ai_trending.start(handle)))
 
-    # 仓位监控（止盈）
+    # 仓位监控（止盈）+ 策略报告
     if not dry_run:
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
+        tasks.append(asyncio.create_task(reporter.start()))
 
     # Meme 趋势扫描（Reddit / TikTok / 链上匹配）
     meme_scanner = SocialTrendScanner(chain=config.default_chain)
