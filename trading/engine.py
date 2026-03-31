@@ -6,6 +6,7 @@ from typing import Callable
 from xxyy.client import client, XxyyAPIError
 from signals.base import TradeSignal
 from trading.position_monitor import PositionMonitor, Position
+from trading.token_analyzer import TokenAnalyzer
 from config import config
 from utils.logger import get_logger
 
@@ -37,6 +38,7 @@ class TradingEngine:
         self._history: list[TradeRecord] = []
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
         self.position_monitor = PositionMonitor()
+        self.analyzer = TokenAnalyzer()
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后执行交易，返回交易记录"""
@@ -50,6 +52,15 @@ class TradingEngine:
         )
 
         is_buy = signal.action == "buy"
+
+        # 买入前先做全面分析
+        if is_buy:
+            analysis = await self.analyzer.analyze(signal.token_address, signal.chain)
+            logger.info("分析结果:\n%s", analysis.summary())
+            if not analysis.passed:
+                logger.info("分析未通过，跳过买入 ca=%s score=%d", signal.token_address, analysis.score)
+                return None
+
         amount = self.buy_amount if is_buy else float(self.sell_percent)
 
         try:

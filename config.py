@@ -29,6 +29,9 @@ class Config:
     # Feed 扫描间隔（秒）
     feed_interval: int = field(default_factory=lambda: int(os.getenv("FEED_INTERVAL", "10")))
 
+    # 买入前分析器最低通过分数（0-100，越高越严格）
+    analyzer_min_score: int = field(default_factory=lambda: int(os.getenv("ANALYZER_MIN_SCORE", "50")))
+
     # Twitter 监控账号列表（逗号分隔）
     twitter_accounts: list[str] = field(default_factory=lambda: [
         a.strip() for a in os.getenv("TWITTER_ACCOUNTS", "").split(",") if a.strip()
