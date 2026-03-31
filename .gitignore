@@ -5,3 +5,4 @@ __pycache__/
 *.pyo
 bot.log
 positions.json
+trade_signals.log

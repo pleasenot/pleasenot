@@ -55,7 +55,7 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     tasks = []
 
     # Feed 扫描（SOL 新币，仅 AI 相关）
-    feed = FeedScanner(chain=config.default_chain, feed_type="NEW", ai_only=True, interval=15)
+    feed = FeedScanner(chain=config.default_chain, feed_type="NEW", ai_only=True, interval=30)
     tasks.append(asyncio.create_task(feed.start(handle)))
 
     # AI 热点信号源
@@ -72,7 +72,7 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         tasks.append(asyncio.create_task(reporter.start()))
 
     # Meme 趋势扫描（Reddit / TikTok / 链上匹配）
-    meme_scanner = SocialTrendScanner(chain=config.default_chain, feed_interval=30)
+    meme_scanner = SocialTrendScanner(chain=config.default_chain, feed_interval=60)
     tasks.append(asyncio.create_task(meme_scanner.start(handle)))
 
     # 名人推文 + KOL 跟单监控（内置名人列表 + 自定义账号）

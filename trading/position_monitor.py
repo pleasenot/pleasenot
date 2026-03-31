@@ -20,7 +20,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-PRICE_CHECK_INTERVAL = 20  # 每 20 秒查一次价格（避免 429）
+PRICE_CHECK_INTERVAL = 60  # 每 60 秒查一轮价格（避免 429）
 
 # ── 止盈阶梯 ─────────────────────────────────────────────
 # (倍数阈值, 卖出百分比, 描述)
@@ -149,6 +149,8 @@ class PositionMonitor:
                 await self._check_position(pos)
             except Exception as e:
                 logger.error("check position error ca=%s: %s", pos.token_address, e)
+            # 每个持仓查完后等 3 秒，避免连续打 API 触发 429
+            await asyncio.sleep(3)
 
     async def _check_position(self, pos: Position) -> None:
         data = await client.query_token(pos.token_address, pos.chain)
@@ -356,6 +358,8 @@ class PositionMonitor:
             if self._safety and "止损" in reason:
                 self._safety.record_loss(0.05)
             self.save_positions()
+            # 写入交易信号汇总
+            self._log_sell_signal(pos, sell_percent, reason, tx_id)
             return True
         else:
             logger.error(
@@ -363,6 +367,23 @@ class PositionMonitor:
                 reason, pos.token_address, tx_id, raw_status,
             )
             return False
+
+    SIGNAL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "trade_signals.log")
+
+    def _log_sell_signal(self, pos: Position, sell_pct: int, reason: str, tx_id: str) -> None:
+        """卖出信号写入 trade_signals.log"""
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = (
+            f"[{ts}] SELL [{reason}] {sell_pct}% "
+            f"ca={pos.token_address} "
+            f"entry=${pos.entry_price:.8f} "
+            f"txId={tx_id}\n"
+        )
+        try:
+            with open(self.SIGNAL_LOG, "a") as f:
+                f.write(line)
+        except Exception as e:
+            logger.error("写入卖出信号失败: %s", e)
 
     # ── 持仓持久化 ─────────────────────────────────────
 

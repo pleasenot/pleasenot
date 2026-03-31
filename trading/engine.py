@@ -1,5 +1,7 @@
 """交易引擎：接收信号，执行买入/卖出，轮询结果"""
 import asyncio
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -154,8 +156,9 @@ class TradingEngine:
             elif record.status == "failed":
                 self.safety.record_failure()
 
-        # 买入成功后登记仓位，启动止盈监控
+        # 买入成功后登记仓位，启动止盈监控，写入信号汇总
         if record.status == "success" and record.signal.action == "buy":
+            self._log_trade_signal(record)
             await self._register_position(record)
 
         if self.on_result:
@@ -211,6 +214,24 @@ class TradingEngine:
             if score >= min_score:
                 return tier_name
         return "拉跨"
+
+    SIGNAL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "trade_signals.log")
+
+    def _log_trade_signal(self, record: TradeRecord) -> None:
+        """每笔成功买入写入 trade_signals.log，方便查看汇总"""
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = (
+            f"[{ts}] BUY {record.tier}({record.score}分) "
+            f"ca={record.signal.token_address} "
+            f"amount={record.buy_amount:.3f}SOL "
+            f"source={record.signal.source} "
+            f"txId={record.tx_id}\n"
+        )
+        try:
+            with open(self.SIGNAL_LOG, "a") as f:
+                f.write(line)
+        except Exception as e:
+            logger.error("写入信号汇总失败: %s", e)
 
     @property
     def history(self) -> list[TradeRecord]:
