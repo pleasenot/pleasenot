@@ -53,7 +53,7 @@ class TradingEngine:
 
         is_buy = signal.action == "buy"
 
-        # 买入前先做全面分析
+        # 买入前先做全面分析 + 分档投入
         if is_buy:
             analysis = await self.analyzer.analyze(signal.token_address, signal.chain)
             logger.info("分析结果:\n%s", analysis.summary())
@@ -61,7 +61,10 @@ class TradingEngine:
                 logger.info("分析未通过，跳过买入 ca=%s score=%d", signal.token_address, analysis.score)
                 return None
 
-        amount = self.buy_amount if is_buy else float(self.sell_percent)
+        if is_buy:
+            amount = self._calc_buy_amount(analysis.score)
+        else:
+            amount = float(self.sell_percent)
 
         try:
             async with self._swap_lock:
@@ -134,6 +137,26 @@ class TradingEngine:
             self.position_monitor.add(pos)
         except Exception as e:
             logger.error("仓位登记失败 ca=%s error=%s", record.signal.token_address, e)
+
+    # ── 分档投入 ─────────────────────────────────────────────
+    # 顶级(≥90): 3x | 人上人(≥75): 2x | NPC(≥50): 1x | 拉跨(<50): 不买
+
+    TIERS = [
+        (90, 3.0, "顶级"),
+        (75, 2.0, "人上人"),
+        (50, 1.0, "NPC"),
+    ]
+
+    def _calc_buy_amount(self, score: int) -> float:
+        for min_score, multiplier, tier_name in self.TIERS:
+            if score >= min_score:
+                amount = self.buy_amount * multiplier
+                logger.info(
+                    "分档投入: score=%d tier=%s multiplier=%.1fx amount=%.3f",
+                    score, tier_name, multiplier, amount,
+                )
+                return amount
+        return self.buy_amount
 
     @property
     def history(self) -> list[TradeRecord]:
