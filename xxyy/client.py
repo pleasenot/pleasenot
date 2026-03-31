@@ -26,15 +26,31 @@ class XxyyClient:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=30.0,
         )
+        # 全局请求节流：避免并发请求触发 429
+        self._throttle = asyncio.Semaphore(1)
+        self._min_interval = 1.0  # 最小请求间隔（秒）
+        self._last_request = 0.0
 
     async def close(self):
         await self._client.aclose()
 
+    async def _wait_throttle(self) -> None:
+        """全局请求节流"""
+        async with self._throttle:
+            import time
+            now = time.monotonic()
+            wait = self._min_interval - (now - self._last_request)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_request = time.monotonic()
+
     async def _get(self, path: str, **params) -> Any:
+        await self._wait_throttle()
         resp = await self._client.get(f"{PREFIX}{path}", params=params)
         return self._parse(resp)
 
     async def _post(self, path: str, body: dict) -> Any:
+        await self._wait_throttle()
         resp = await self._client.post(f"{PREFIX}{path}", json=body)
         return self._parse(resp)
 
@@ -110,8 +126,14 @@ class XxyyClient:
     # ── KOL 跟单 ──────────────────────────────────────────
 
     async def kol_buys(self, chain: str = "sol") -> list[dict]:
-        """获取 KOL 买入列表"""
-        result = await self._get("/kol/buys", chain=chain)
+        """获取 KOL 买入列表。API 路径可能需要调整。"""
+        try:
+            result = await self._get("/kol/buys", chain=chain)
+        except (XxyyAPIError, httpx.HTTPStatusError) as e:
+            if "404" in str(e) or (isinstance(e, XxyyAPIError) and e.code == 404):
+                logger.debug("kol/buys endpoint not available")
+                return []
+            raise
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
@@ -119,8 +141,14 @@ class XxyyClient:
         return []
 
     async def smart_wallets(self, token_address: str, chain: str = "sol") -> list[dict]:
-        """查询某代币的聪明钱持仓信息"""
-        result = await self._get("/smart-wallet", ca=token_address, chain=chain)
+        """查询某代币的聪明钱持仓信息。API 路径可能需要调整。"""
+        try:
+            result = await self._get("/smart-wallet", ca=token_address, chain=chain)
+        except (XxyyAPIError, httpx.HTTPStatusError) as e:
+            if "404" in str(e) or (isinstance(e, XxyyAPIError) and e.code == 404):
+                logger.debug("smart-wallet endpoint not available for ca=%s", token_address)
+                return []
+            raise
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
@@ -130,8 +158,14 @@ class XxyyClient:
     # ── AI 信号 ───────────────────────────────────────────
 
     async def ai_trending(self, chain: str = "sol") -> list[dict]:
-        """获取 AI 热点代币列表（open-ai-trending）"""
-        result = await self._get("/open-ai-trending", chain=chain)
+        """获取 AI 热点代币列表。API 路径可能需要调整。"""
+        try:
+            result = await self._get("/open-ai-trending", chain=chain)
+        except (XxyyAPIError, httpx.HTTPStatusError) as e:
+            if "404" in str(e) or (isinstance(e, XxyyAPIError) and e.code == 404):
+                logger.debug("ai-trending endpoint not available")
+                return []
+            raise
         if isinstance(result, list):
             return result
         if isinstance(result, dict):
