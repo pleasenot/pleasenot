@@ -57,13 +57,12 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     if not dry_run:
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
 
-    # Twitter 监控（如配置了账号）
-    if not feed_only and config.twitter_accounts:
-        twitter = TwitterScanner(accounts=config.twitter_accounts, chain=config.default_chain)
+    # 名人推文 + KOL 跟单监控（内置名人列表 + 自定义账号）
+    if not feed_only:
+        extra_accounts = config.twitter_accounts if config.twitter_accounts else None
+        twitter = TwitterScanner(accounts=extra_accounts, chain=config.default_chain)
         tasks.append(asyncio.create_task(twitter.start(handle)))
-        logger.info("Twitter 监控已启动，监控账号: %s", config.twitter_accounts)
-    elif not feed_only:
-        logger.warning("未配置 TWITTER_ACCOUNTS，跳过 Twitter 监控")
+        logger.info("名人推文 + KOL 跟单监控已启动")
 
     logger.info("Bot 已启动，dry_run=%s", dry_run)
     await asyncio.gather(*tasks)

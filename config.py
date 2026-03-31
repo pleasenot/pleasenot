@@ -32,7 +32,10 @@ class Config:
     # 买入前分析器最低通过分数（0-100，越高越严格）
     analyzer_min_score: int = field(default_factory=lambda: int(os.getenv("ANALYZER_MIN_SCORE", "50")))
 
-    # Twitter 监控账号列表（逗号分隔）
+    # Twitter API Bearer Token（用于推文监控，可选）
+    twitter_bearer_token: str = field(default_factory=lambda: os.getenv("TWITTER_BEARER_TOKEN", ""))
+
+    # Twitter 额外监控账号（逗号分隔，会与内置名人列表合并）
     twitter_accounts: list[str] = field(default_factory=lambda: [
         a.strip() for a in os.getenv("TWITTER_ACCOUNTS", "").split(",") if a.strip()
     ])

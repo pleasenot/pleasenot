@@ -107,6 +107,26 @@ class XxyyClient:
                 await asyncio.sleep(interval)
         return result
 
+    # ── KOL 跟单 ──────────────────────────────────────────
+
+    async def kol_buys(self, chain: str = "sol") -> list[dict]:
+        """获取 KOL 买入列表"""
+        result = await self._get("/kol/buys", chain=chain)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
+
+    async def smart_wallets(self, token_address: str, chain: str = "sol") -> list[dict]:
+        """查询某代币的聪明钱持仓信息"""
+        result = await self._get("/smart-wallet", ca=token_address, chain=chain)
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
+
     # ── AI 信号 ───────────────────────────────────────────
 
     async def ai_trending(self, chain: str = "sol") -> list[dict]:

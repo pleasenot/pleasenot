@@ -80,6 +80,9 @@ class TokenAnalyzer:
         # ── 6. 社交信号 ─────────────────────────────────
         self._check_socials(socials, data, result)
 
+        # ── 7. 聪明钱信号 ───────────────────────────────
+        await self._check_smart_money(token_address, chain, result)
+
         # 有一票否决项直接不过
         if result.fatal:
             result.passed = False
@@ -263,3 +266,54 @@ class TokenAnalyzer:
         else:
             result.score += 0
             result.reasons.append("+0 无社交信息")
+
+    # ── 聪明钱信号 ──────────────────────────────────────────
+
+    async def _check_smart_money(self, token_address: str, chain: str, result: AnalysisResult) -> None:
+        """
+        查询聪明钱（Smart Money）是否持仓/买入该代币。
+        聪明钱 = 历史胜率高的钱包（鲸鱼、KOL、专业交易员）。
+        有聪明钱介入是强烈的看涨信号。
+        """
+        try:
+            wallets = await client.smart_wallets(token_address, chain)
+        except Exception as e:
+            logger.debug("smart wallet query failed ca=%s: %s", token_address, e)
+            result.reasons.append("+0 聪明钱数据查询失败")
+            return
+
+        if not wallets:
+            result.reasons.append("+0 无聪明钱数据")
+            return
+
+        sm_count = len(wallets)
+
+        # 统计聪明钱总持仓金额
+        total_value = 0.0
+        buy_count = 0
+        for w in wallets:
+            val = float(w.get("holdingValueUSD", 0) or w.get("valueUSD", 0) or 0)
+            total_value += val
+            action = w.get("action", "").lower()
+            if action in ("buy", "bought"):
+                buy_count += 1
+
+        if sm_count >= 5:
+            result.score += 20
+            result.reasons.append(
+                f"+20 聪明钱强信号({sm_count}个钱包, 持仓${total_value:,.0f})"
+            )
+        elif sm_count >= 3:
+            result.score += 15
+            result.reasons.append(
+                f"+15 聪明钱关注中({sm_count}个钱包, 持仓${total_value:,.0f})"
+            )
+        elif sm_count >= 1:
+            result.score += 10
+            result.reasons.append(
+                f"+10 有聪明钱介入({sm_count}个钱包, 持仓${total_value:,.0f})"
+            )
+
+        if buy_count > 0:
+            result.score += 5
+            result.reasons.append(f"+5 聪明钱近期有{buy_count}笔买入")
