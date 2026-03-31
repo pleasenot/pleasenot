@@ -22,6 +22,7 @@ AI_KEYWORDS = [
     "rag", "vector", "embedding", "fine-tune", "finetune",
     "prompt", "chain of thought", "cot",
     "distill", "distillation", "蒸馏",
+    ".skill", "前任", "老板", "同事", "ex-skill", "boss skill",
 
     # 基础设施 & 芯片
     "nvidia", "cuda", "gpu", "tpu", "tensor",
@@ -39,6 +40,7 @@ AI_KEYWORDS = [
 
     # 热点事件相关（可随时添加）
     "claude code", "myths", "opus", "sonnet", "haiku",
+    "mythos", "capybara",
 ]
 
 # 预编译正则：每个关键词作为独立 pattern，忽略大小写
