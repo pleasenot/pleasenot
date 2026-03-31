@@ -80,8 +80,8 @@ class StrategyReporter:
         # ── 2. 持仓状态 ──────────────────────────────────
         lines.append("")
         lines.append("【当前持仓】")
-        open_positions = [p for p in positions if p.status == "open"]
-        tp_positions = [p for p in positions if p.status in ("tp_triggered", "closed")]
+        open_positions = [p for p in positions if p.status in ("open", "trailing")]
+        closed_positions = [p for p in positions if p.status == "closed"]
 
         if open_positions:
             for pos in open_positions:
@@ -89,18 +89,24 @@ class StrategyReporter:
                 if current_price > 0 and pos.entry_price > 0:
                     pnl = (current_price / pos.entry_price - 1) * 100
                     emoji = "📈" if pnl > 0 else "📉"
+                    trail = " [移动止盈中]" if pos.trailing_active else ""
+                    tp_info = f" TP{pos.tp_level}/3" if pos.tp_level > 0 else ""
                     lines.append(
                         f"  {emoji} {pos.token_address[:8]}... | "
                         f"入场${pos.entry_price:.8f} → 现价${current_price:.8f} | "
-                        f"{'+'if pnl>0 else ''}{pnl:.1f}%"
+                        f"{'+'if pnl>0 else ''}{pnl:.1f}%{tp_info}{trail}"
                     )
                 else:
                     lines.append(f"  ⏳ {pos.token_address[:8]}... | 入场${pos.entry_price:.8f} | 价格获取中...")
         else:
             lines.append("  无持仓")
 
-        if tp_positions:
-            lines.append(f"  已止盈: {len(tp_positions)} 笔")
+        # 卖出记录
+        if closed_positions:
+            lines.append(f"  已平仓: {len(closed_positions)} 笔")
+            for pos in closed_positions[-5:]:  # 最近5笔
+                if pos.sell_log:
+                    lines.append(f"    {pos.token_address[:8]}... → {'; '.join(pos.sell_log)}")
 
         # ── 3. 分档分布 ──────────────────────────────────
         lines.append("")
