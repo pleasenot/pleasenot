@@ -423,6 +423,7 @@ class PositionMonitor:
             for d in data:
                 if d["token_address"] in known:
                     continue
+                # 恢复持仓时重置 entry_time 为当前时间，避免时间止损误触发
                 pos = Position(
                     chain=d["chain"],
                     token_address=d["token_address"],
@@ -433,7 +434,7 @@ class PositionMonitor:
                     tp_level=d.get("tp_level", 0),
                     highest_price=d.get("highest_price", 0.0),
                     trailing_active=d.get("trailing_active", False),
-                    entry_time=d.get("entry_time", time.time()),
+                    entry_time=time.time(),
                 )
                 self._positions.append(pos)
                 count += 1

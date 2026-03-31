@@ -64,10 +64,9 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
 
     # 仓位监控（止盈）+ 策略报告
     if not dry_run:
-        # 启动前先恢复已有持仓（文件 > 链上）
+        # 启动前从 positions.json 恢复持仓
         loaded = engine.position_monitor.load_positions()
-        if loaded == 0:
-            await engine.position_monitor.recover_from_wallet(engine.wallet_address, config.default_chain)
+        logger.info("从文件恢复了 %d 个持仓", loaded)
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
         tasks.append(asyncio.create_task(reporter.start()))
 
