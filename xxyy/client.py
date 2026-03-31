@@ -84,7 +84,10 @@ class XxyyClient:
             "tip": tip if tip is not None else config.tip,
         }
         result = await self._post("/swap", body)
-        tx_id = result.get("txId") if isinstance(result, dict) else result
+        if isinstance(result, dict):
+            tx_id = result.get("signature") or result.get("txId")
+        else:
+            tx_id = result
         logger.info("swap submitted txId=%s buy=%s ca=%s", tx_id, is_buy, token_address)
         return tx_id
 
@@ -97,7 +100,8 @@ class XxyyClient:
             result = await self.get_trade(tx_id)
             status = result.get("status") if isinstance(result, dict) else None
             logger.info("trade status txId=%s status=%s attempt=%d", tx_id, status, i + 1)
-            if status in ("success", "failed"):
+            # status: 1=pending, 2=success, 3=failed
+            if status in (2, 3):
                 return result
             if i < retries - 1:
                 await asyncio.sleep(interval)
@@ -113,7 +117,11 @@ class XxyyClient:
         """
         body = {"chain": chain, **(filters or {})}
         result = await self._post(f"/feed/{feed_type}", body)
-        return result if isinstance(result, list) else []
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
 
 
 # 全局单例

@@ -34,6 +34,7 @@ class TradingEngine:
         self.tip = tip or config.tip
         self.on_result = on_result
         self._history: list[TradeRecord] = []
+        self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后执行交易，返回交易记录"""
@@ -50,14 +51,15 @@ class TradingEngine:
         amount = self.buy_amount if is_buy else float(self.sell_percent)
 
         try:
-            tx_id = await client.swap(
-                chain=signal.chain,
-                wallet_address=self.wallet_address,
-                token_address=signal.token_address,
-                is_buy=is_buy,
-                amount=amount,
-                tip=self.tip,
-            )
+            async with self._swap_lock:
+                tx_id = await client.swap(
+                    chain=signal.chain,
+                    wallet_address=self.wallet_address,
+                    token_address=signal.token_address,
+                    is_buy=is_buy,
+                    amount=amount,
+                    tip=self.tip,
+                )
         except XxyyAPIError as e:
             logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)
             return None
@@ -73,7 +75,13 @@ class TradingEngine:
         try:
             result = await client.wait_trade(record.tx_id)
             record.result = result if isinstance(result, dict) else {}
-            record.status = record.result.get("status", "unknown")
+            raw_status = record.result.get("status")
+            if raw_status == 2:
+                record.status = "success"
+            elif raw_status == 3:
+                record.status = "failed"
+            else:
+                record.status = "unknown"
             logger.info(
                 "交易完成 txId=%s status=%s ca=%s",
                 record.tx_id, record.status, record.signal.token_address,
