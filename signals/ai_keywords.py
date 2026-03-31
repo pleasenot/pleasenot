@@ -38,6 +38,16 @@ AI_KEYWORDS = [
     "singularity", "ocean protocol", "render",
     "bittensor", "tao", "worldcoin",
 
+    # 量子计算 & 后量子密码学
+    "quantum", "qubit", "qubits", "量子",
+    "pqc", "post-quantum", "post quantum",
+    "ml-kem", "ml kem", "kyber", "crystals-kyber",
+    "dilithium", "crystals-dilithium",
+    "lattice", "sphincs", "falcon",
+    "shor", "grover", "superposition",
+    "quantum resistant", "quantum safe", "quantum proof",
+    "qkd", "quantum key",
+
     # 热点事件相关（可随时添加）
     "claude code", "myths", "opus", "sonnet", "haiku",
     "mythos", "capybara",
