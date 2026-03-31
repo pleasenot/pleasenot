@@ -8,9 +8,12 @@
 4. 市值定位 — 早期介入甜区
 5. 交易热度 — 成交量、买卖比
 6. 社交信号 — 官网、Twitter、Telegram
+7. 聪明钱信号 — Smart Money 持仓/买入
+8. AI 智能研判 — MiniMax 大模型分析叙事质量
 """
 from dataclasses import dataclass, field
 from xxyy.client import client
+from llm.minimax_client import minimax
 from config import config
 from utils.logger import get_logger
 
@@ -82,6 +85,9 @@ class TokenAnalyzer:
 
         # ── 7. 聪明钱信号 ───────────────────────────────
         await self._check_smart_money(token_address, chain, result)
+
+        # ── 8. AI 智能研判（MiniMax）─────────────────────
+        await self._check_ai_verdict(data, socials, result)
 
         # 有一票否决项直接不过
         if result.fatal:
@@ -317,3 +323,48 @@ class TokenAnalyzer:
         if buy_count > 0:
             result.score += 5
             result.reasons.append(f"+5 聪明钱近期有{buy_count}笔买入")
+
+    # ── AI 智能研判（MiniMax）───────────────────────────────
+
+    async def _check_ai_verdict(self, data: dict, socials: dict, result: AnalysisResult) -> None:
+        """
+        用 MiniMax 大模型分析代币叙事质量。
+        AI 判断这个币是蹭了真实热点还是纯垃圾。
+        """
+        if not minimax.available:
+            result.reasons.append("+0 AI研判未启用(未配置MINIMAX_API_KEY)")
+            return
+
+        trade_info = data.get("tradeInfo") or {}
+        name = data.get("name") or data.get("tokenName", "")
+        symbol = data.get("symbol", "")
+        description = data.get("description", "")
+        mc = float(trade_info.get("marketCapUSD", 0) or 0)
+        holders = int(data.get("holders", 0) or 0)
+
+        ai_result = await minimax.analyze_token(
+            name=name,
+            symbol=symbol,
+            description=description,
+            market_cap=mc,
+            holders=holders,
+            has_website=bool(socials.get("website") or data.get("website")),
+            has_twitter=bool(socials.get("twitter") or data.get("twitter")),
+            has_telegram=bool(socials.get("telegram") or data.get("telegram")),
+        )
+
+        ai_score = ai_result.get("score", 0)
+        verdict = ai_result.get("verdict", "SKIP")
+        reason = ai_result.get("reason", "无")
+
+        # AI 评分映射到分析器加分（AI满分100 → 最高加20分）
+        bonus = int(ai_score * 0.2)
+        result.score += bonus
+        result.reasons.append(
+            f"+{bonus} AI研判: {verdict} (AI评分{ai_score}/100) — {reason}"
+        )
+
+        # AI 强烈不推荐时扣分
+        if ai_score < 20 and verdict == "SKIP":
+            result.score -= 10
+            result.reasons.append(f"-10 AI强烈不推荐")
