@@ -108,6 +108,9 @@ class StrategyReporter:
                 if pos.sell_log:
                     lines.append(f"    {pos.token_address[:8]}... → {'; '.join(pos.sell_log)}")
 
+        # ── 2.5 钱包总持仓（链上实际数据）─────────────────
+        await self._append_wallet_holdings(lines)
+
         # ── 3. 分档分布 ──────────────────────────────────
         lines.append("")
         lines.append("【分档分布】")
@@ -242,6 +245,46 @@ class StrategyReporter:
             suggestions.append("当前运行正常，继续观察")
 
         return suggestions
+
+    async def _append_wallet_holdings(self, lines: list) -> None:
+        """查询钱包链上实际持仓，输出总览"""
+        wallet = config.wallet_address
+        if not wallet:
+            return
+
+        lines.append("")
+        lines.append("【钱包总持仓（链上）】")
+
+        try:
+            # 查钱包信息（余额）
+            info = await client.wallet_info(wallet, config.default_chain)
+            if isinstance(info, dict):
+                sol_balance = float(info.get("balance", 0) or info.get("solBalance", 0) or 0)
+                lines.append(f"  SOL 余额: {sol_balance:.4f} SOL")
+
+            # 查持有代币
+            holdings = await client.wallet_holdings(wallet, config.default_chain)
+            if holdings:
+                total_value = 0.0
+                lines.append(f"  持有代币: {len(holdings)} 个")
+                # 按价值排序，展示前10个
+                sorted_holdings = sorted(
+                    holdings,
+                    key=lambda h: float(h.get("valueUSD", 0) or h.get("holdingValueUSD", 0) or 0),
+                    reverse=True,
+                )
+                for h in sorted_holdings[:10]:
+                    symbol = h.get("symbol", "?")
+                    value = float(h.get("valueUSD", 0) or h.get("holdingValueUSD", 0) or 0)
+                    pnl = float(h.get("pnl", 0) or h.get("profitUSD", 0) or 0)
+                    total_value += value
+                    pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+                    lines.append(f"    {symbol:12s} | 价值${value:,.2f} | 盈亏{pnl_str}")
+                lines.append(f"  总持仓价值: ${total_value:,.2f}")
+            else:
+                lines.append("  无代币持仓")
+        except Exception as e:
+            lines.append(f"  查询失败: {e}")
 
     async def _get_current_price(self, pos) -> float:
         """获取当前价格"""

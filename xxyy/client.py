@@ -74,6 +74,21 @@ class XxyyClient:
     async def wallet_info(self, wallet_address: str, chain: str) -> dict:
         return await self._get("/wallet/info", walletAddress=wallet_address, chain=chain)
 
+    async def wallet_holdings(self, wallet_address: str, chain: str) -> list[dict]:
+        """查询钱包持有的所有代币"""
+        try:
+            result = await self._get("/wallet/holdings", walletAddress=wallet_address, chain=chain)
+        except (XxyyAPIError, httpx.HTTPStatusError) as e:
+            if "404" in str(e) or (isinstance(e, XxyyAPIError) and e.code == 404):
+                logger.debug("wallet/holdings endpoint not available")
+                return []
+            raise
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
+
     # ── 代币查询 ──────────────────────────────────────────
 
     async def query_token(self, ca: str, chain: str) -> dict:
