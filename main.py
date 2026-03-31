@@ -32,8 +32,11 @@ def on_trade_result(record: TradeRecord) -> None:
 
 async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     # 验证 API 连通性
-    pong = await client.ping()
-    logger.info("XXYY API 连接正常: %s", pong)
+    if not dry_run:
+        pong = await client.ping()
+        logger.info("XXYY API 连接正常: %s", pong)
+    else:
+        logger.info("[DRY-RUN] 跳过 API 连通性检查")
 
     engine = TradingEngine(on_result=on_trade_result)
 
@@ -83,8 +86,6 @@ def main():
         asyncio.run(run(feed_only=args.feed_only, dry_run=args.dry_run))
     except KeyboardInterrupt:
         logger.info("Bot 已停止")
-    finally:
-        asyncio.run(client.close())
 
 
 if __name__ == "__main__":
