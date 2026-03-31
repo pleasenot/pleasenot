@@ -5,6 +5,7 @@ from typing import Callable
 
 from xxyy.client import client, XxyyAPIError
 from signals.base import TradeSignal
+from trading.position_monitor import PositionMonitor, Position
 from config import config
 from utils.logger import get_logger
 
@@ -35,6 +36,7 @@ class TradingEngine:
         self.on_result = on_result
         self._history: list[TradeRecord] = []
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
+        self.position_monitor = PositionMonitor()
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后执行交易，返回交易记录"""
@@ -90,11 +92,37 @@ class TradingEngine:
             record.status = "failed"
             logger.error("轮询交易状态失败 txId=%s error=%s", record.tx_id, e)
 
+        # 买入成功后登记仓位，启动止盈监控
+        if record.status == "success" and record.signal.action == "buy":
+            await self._register_position(record)
+
         if self.on_result:
             if asyncio.iscoroutinefunction(self.on_result):
                 await self.on_result(record)
             else:
                 self.on_result(record)
+
+    async def _register_position(self, record: TradeRecord) -> None:
+        """买入成功后查询入场价格，登记仓位"""
+        try:
+            token_data = await client.query_token(
+                record.signal.token_address, record.signal.chain
+            )
+            trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
+            entry_price = float(trade_info.get("price") or 0)
+            if entry_price <= 0:
+                logger.warning("无法获取入场价格 ca=%s，跳过仓位登记", record.signal.token_address)
+                return
+            pos = Position(
+                chain=record.signal.chain,
+                token_address=record.signal.token_address,
+                wallet_address=self.wallet_address,
+                entry_price=entry_price,
+                tip=self.tip,
+            )
+            self.position_monitor.add(pos)
+        except Exception as e:
+            logger.error("仓位登记失败 ca=%s error=%s", record.signal.token_address, e)
 
     @property
     def history(self) -> list[TradeRecord]:

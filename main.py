@@ -48,6 +48,10 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     feed = FeedScanner(chain=config.default_chain, feed_type="NEW")
     tasks.append(asyncio.create_task(feed.start(handle)))
 
+    # 仓位监控（止盈）
+    if not dry_run:
+        tasks.append(asyncio.create_task(engine.position_monitor.start()))
+
     # Twitter 监控（如配置了账号）
     if not feed_only and config.twitter_accounts:
         twitter = TwitterScanner(accounts=config.twitter_accounts, chain=config.default_chain)
