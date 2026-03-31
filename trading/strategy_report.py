@@ -25,7 +25,7 @@ REPORT_INTERVAL = 300
 
 
 class StrategyReporter:
-    """定期生成策略报告，追踪交易表现"""
+    """定期生成策略报告，追踪交易表现，并自动优化参数"""
 
     def __init__(self, engine, interval: int = REPORT_INTERVAL):
         self._engine = engine
@@ -35,6 +35,8 @@ class StrategyReporter:
         # 记录被拒绝的信号（用于统计通过率）
         self._rejected: list[dict] = []
         self._signals_total = 0
+        # 自动优化追踪
+        self._auto_optimized = False
 
     def record_signal(self, source: str, passed: bool, score: int = 0) -> None:
         """记录每个信号的分析结果（不管是否通过）"""
@@ -175,6 +177,19 @@ class StrategyReporter:
         for i, s in enumerate(suggestions, 1):
             lines.append(f"  {i}. {s}")
 
+        # ── 7. 自动优化 ──────────────────────────────────
+        optimizations = self._auto_optimize(history, all_scores, open_positions)
+        if optimizations:
+            lines.append("")
+            lines.append("【自动优化已执行】")
+            for opt in optimizations:
+                lines.append(f"  ⚙️ {opt}")
+
+        # ── 8. 安全护栏状态 ──────────────────────────────
+        if hasattr(self._engine, 'safety'):
+            lines.append("")
+            lines.append(f"【安全护栏】{self._engine.safety.status()}")
+
         lines.append("")
         lines.append("=" * 70)
 
@@ -245,6 +260,42 @@ class StrategyReporter:
             suggestions.append("当前运行正常，继续观察")
 
         return suggestions
+
+    def _auto_optimize(self, history: list, all_scores: list, open_positions: list) -> list[str]:
+        """基于运行数据自动调优参数，保护资金安全"""
+        optimizations = []
+        buys = [r for r in history if r.signal.action == "buy"]
+        failed = [r for r in buys if r.status == "failed"]
+        success = [r for r in buys if r.status == "success"]
+
+        # 如果失败率 > 40% 且有足够样本，提高最低分数线
+        if len(buys) >= 5 and len(failed) / len(buys) > 0.4:
+            old_score = config.analyzer_min_score
+            new_score = min(old_score + 5, 85)
+            if new_score != old_score:
+                config.analyzer_min_score = new_score
+                optimizations.append(f"失败率过高({len(failed)}/{len(buys)})，最低分数线 {old_score} → {new_score}")
+
+        # 如果连续 3 笔都失败，降低单笔投入
+        recent = buys[-3:] if len(buys) >= 3 else []
+        if len(recent) == 3 and all(r.status == "failed" for r in recent):
+            from trading.safety import MAX_SINGLE_BUY_SOL
+            old_amount = self._engine.buy_amount
+            new_amount = max(old_amount * 0.7, 0.05)  # 最低 0.05 SOL
+            if new_amount < old_amount:
+                self._engine.buy_amount = new_amount
+                optimizations.append(f"连续失败，单笔投入 {old_amount:.3f} → {new_amount:.3f} SOL")
+
+        # 如果一直没有成功交易且已运行超过 30 分钟，暂停买入 10 分钟
+        uptime_min = (time.time() - self._start_time) / 60
+        if uptime_min > 30 and len(buys) > 5 and len(success) == 0:
+            if hasattr(self._engine, 'safety') and not self._engine.safety._paused:
+                self._engine.safety.pause("长时间无成功交易，自动暂停10分钟观察")
+                optimizations.append("长时间无成功交易，暂停买入10分钟")
+                # 10分钟后自动恢复
+                asyncio.get_event_loop().call_later(600, self._engine.safety.resume)
+
+        return optimizations
 
     async def _append_wallet_holdings(self, lines: list) -> None:
         """查询钱包链上实际持仓，输出总览"""

@@ -74,6 +74,10 @@ class PositionMonitor:
         self._positions: list[Position] = []
         self._swap_lock = asyncio.Semaphore(1)
         self._running = False
+        self._safety = None  # 由 engine 注入
+
+    def set_safety(self, safety) -> None:
+        self._safety = safety
 
     def add(self, position: Position) -> None:
         self._positions.append(position)
@@ -309,6 +313,10 @@ class PositionMonitor:
                 "✅ 卖出成功[%s] ca=%s %d%% txId=%s",
                 reason, pos.token_address, sell_percent, tx_id,
             )
+            # 记录亏损到安全护栏（仅在亏损时）
+            if self._safety and "止损" in reason:
+                # 粗估亏损：入场价对应的投入（按比例）
+                self._safety.record_loss(0.05)  # 保守估算每笔亏损
             return True
         else:
             logger.error(

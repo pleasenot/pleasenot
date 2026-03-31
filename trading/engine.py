@@ -7,6 +7,7 @@ from xxyy.client import client, XxyyAPIError
 from signals.base import TradeSignal
 from trading.position_monitor import PositionMonitor, Position
 from trading.token_analyzer import TokenAnalyzer
+from trading.safety import SafetyGuard
 from config import config
 from utils.logger import get_logger
 
@@ -42,6 +43,8 @@ class TradingEngine:
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
         self.position_monitor = PositionMonitor()
         self.analyzer = TokenAnalyzer()
+        self.safety = SafetyGuard()
+        self.position_monitor.set_safety(self.safety)
         self.reporter = None  # 由 main.py 注入
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
@@ -71,6 +74,23 @@ class TradingEngine:
 
         if is_buy:
             amount = self._calc_buy_amount(analysis.score)
+
+            # ── 安全护栏检查 ──────────────────────────────
+            try:
+                wallet_info = await client.wallet_info(self.wallet_address, signal.chain)
+                sol_balance = float(
+                    (wallet_info or {}).get("balance", 0)
+                    or (wallet_info or {}).get("solBalance", 0)
+                    or 0
+                )
+            except Exception:
+                sol_balance = 0.0
+
+            open_count = len([p for p in self.position_monitor.positions if p.status != "closed"])
+            allowed, reason = self.safety.can_buy(amount, sol_balance, open_count)
+            if not allowed:
+                logger.warning("安全护栏拦截买入: %s ca=%s amount=%.3f", reason, signal.token_address, amount)
+                return None
         else:
             amount = float(self.sell_percent)
 
@@ -86,6 +106,8 @@ class TradingEngine:
                 )
         except XxyyAPIError as e:
             logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)
+            if is_buy:
+                self.safety.record_failure()
             return None
 
         record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
@@ -116,6 +138,14 @@ class TradingEngine:
         except Exception as e:
             record.status = "failed"
             logger.error("轮询交易状态失败 txId=%s error=%s", record.tx_id, e)
+
+        # 安全统计
+        if record.signal.action == "buy":
+            if record.status == "success":
+                self.safety.record_buy(record.buy_amount)
+                self.safety.record_success()
+            elif record.status == "failed":
+                self.safety.record_failure()
 
         # 买入成功后登记仓位，启动止盈监控
         if record.status == "success" and record.signal.action == "buy":
