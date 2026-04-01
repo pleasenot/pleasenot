@@ -66,7 +66,22 @@ class TokenAnalyzer:
         link_info = data.get("linkInfo") or {}
         dev_info = data.get("dev") or {}
 
-        # ── 1. 安全性检查（一票否决 + 扣分）──────────────
+        # ── 0. 硬性门槛（不达标直接否决，节省 API 调用）─────
+        holders = int(trade_info.get("holder", 0) or 0)
+        vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+        mc = float(trade_info.get("marketCapUsd", 0) or 0)
+
+        if holders < 30:
+            result.fatal.append(f"持仓人不足30({holders})，太早期")
+            return result
+        if vol < 5000:
+            result.fatal.append(f"1h成交量不足$5k(${vol:,.0f})，无人气")
+            return result
+        if mc < 5000:
+            result.fatal.append(f"市值不足$5k(${mc:,.0f})，太小")
+            return result
+
+        # ── 1. 安全性检查（一票否决 + 加分）──────────────
         self._check_security(security_info, trade_info, result)
 
         # ── 2. 筹码分布 ─────────────────────────────────
@@ -113,24 +128,19 @@ class TokenAnalyzer:
         no_freeze = security_info.get("noFreeze", False)
         locked = security_info.get("locked", False)
 
+        # PumpFun 上几乎所有币都 noMint+noFreeze+locked，降低白送分
         if no_mint and no_freeze:
-            result.score += 15
-            result.reasons.append("+15 合约安全(noMint+noFreeze)")
+            result.score += 5
+            result.reasons.append("+5 合约安全(noMint+noFreeze)")
         elif no_mint or no_freeze:
-            result.score += 8
-            reasons = []
-            if no_mint:
-                reasons.append("noMint")
-            if no_freeze:
-                reasons.append("noFreeze")
-            result.reasons.append(f"+8 合约部分安全({'+'.join(reasons)})")
+            result.score += 3
+            result.reasons.append(f"+3 合约部分安全")
         else:
-            result.score += 0
-            result.reasons.append("+0 合约未放弃权限，有 rug 风险")
+            result.fatal.append("合约未放弃权限，有 rug 风险")
 
         if locked:
-            result.score += 5
-            result.reasons.append("+5 流动性已锁定")
+            result.score += 3
+            result.reasons.append("+3 流动性已锁定")
 
     # ── 筹码分布 ────────────────────────────────────────────
 
@@ -142,18 +152,18 @@ class TokenAnalyzer:
         """
         holders = int(trade_info.get("holder", 0) or 0)
 
-        if holders >= 200:
-            result.score += 15
-            result.reasons.append(f"+15 持仓人数多({holders})")
-        elif holders >= 50:
+        if holders >= 500:
             result.score += 10
-            result.reasons.append(f"+10 持仓人数尚可({holders})")
-        elif holders >= 10:
+            result.reasons.append(f"+10 持仓人数多({holders})")
+        elif holders >= 200:
+            result.score += 7
+            result.reasons.append(f"+7 持仓人数不错({holders})")
+        elif holders >= 100:
             result.score += 5
-            result.reasons.append(f"+5 持仓人数偏少({holders})")
+            result.reasons.append(f"+5 持仓人数尚可({holders})")
         else:
-            result.score -= 5
-            result.reasons.append(f"-5 持仓人太少({holders})")
+            result.score += 2
+            result.reasons.append(f"+2 持仓人数偏少({holders})")
 
         # Dev 持仓
         dev_hp = float(dev_info.get("pct", 0) or 0)
@@ -206,20 +216,20 @@ class TokenAnalyzer:
 
         # 早期介入甜区：$10k - $500k
         if 10_000 <= mc <= 100_000:
-            result.score += 20
-            result.reasons.append(f"+20 市值处于早期甜区(${mc:,.0f})")
-        elif 100_000 < mc <= 500_000:
-            result.score += 15
-            result.reasons.append(f"+15 市值适中(${mc:,.0f})")
-        elif 500_000 < mc <= 2_000_000:
             result.score += 10
-            result.reasons.append(f"+10 市值偏高但仍有空间(${mc:,.0f})")
-        elif mc > 2_000_000:
+            result.reasons.append(f"+10 市值甜区(${mc:,.0f})")
+        elif 100_000 < mc <= 500_000:
+            result.score += 8
+            result.reasons.append(f"+8 市值适中(${mc:,.0f})")
+        elif 500_000 < mc <= 2_000_000:
             result.score += 5
-            result.reasons.append(f"+5 市值较高，上行空间有限(${mc:,.0f})")
+            result.reasons.append(f"+5 市值偏高(${mc:,.0f})")
+        elif mc > 2_000_000:
+            result.score += 2
+            result.reasons.append(f"+2 市值高，上行有限(${mc:,.0f})")
         else:
             result.score += 0
-            result.reasons.append(f"+0 市值过低，风险较大(${mc:,.0f})")
+            result.reasons.append(f"+0 市值过低(${mc:,.0f})")
 
     # ── 交易热度 ────────────────────────────────────────────
 
@@ -228,15 +238,18 @@ class TokenAnalyzer:
         vol = float(trade_info.get("hourTradeVolume", 0) or trade_info.get("volume24h", 0) or 0)
         trade_num = int(trade_info.get("hourTradeNum", 0) or 0)
 
-        if vol >= 50000:
+        if vol >= 100000:
             result.score += 10
-            result.reasons.append(f"+10 成交量活跃(${vol:,.0f}, {trade_num}笔)")
-        elif vol >= 10000:
-            result.score += 5
-            result.reasons.append(f"+5 成交量一般(${vol:,.0f}, {trade_num}笔)")
+            result.reasons.append(f"+10 成交量火爆(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 50000:
+            result.score += 7
+            result.reasons.append(f"+7 成交量活跃(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 20000:
+            result.score += 4
+            result.reasons.append(f"+4 成交量尚可(${vol:,.0f}, {trade_num}笔)")
         else:
             result.score += 0
-            result.reasons.append(f"+0 成交量低(${vol:,.0f}, {trade_num}笔)")
+            result.reasons.append(f"+0 成交量偏低(${vol:,.0f}, {trade_num}笔)")
 
     # ── 社交信号 ────────────────────────────────────────────
 
@@ -357,17 +370,23 @@ class TokenAnalyzer:
         verdict = ai_result.get("verdict", "SKIP")
         reason = ai_result.get("reason", "无")
 
-        # AI 评分映射到分析器加分（AI满分100 → 最高加20分）
-        bonus = int(ai_score * 0.2)
+        # AI 评分权重大幅提升（满分100 → 最高加 30 分）
+        # AI 是区分真热点 vs 垃圾的核心能力
+        bonus = int(ai_score * 0.3)
         result.score += bonus
         result.reasons.append(
             f"+{bonus} AI研判: {verdict} (AI评分{ai_score}/100) — {reason}"
         )
 
-        # AI 判定 SKIP 且分数极低 → 一票否决（防止垃圾币蒙混过关）
-        # 注意：阈值不能太高，AI 可能不了解最新热点（如 Capybara=Claude代号）
-        if verdict == "SKIP" and ai_score < 15:
-            result.fatal.append(f"AI一票否决: 叙事不过关(AI评分{ai_score}/100) — {reason}")
-        elif ai_score < 20:
-            result.score -= 10
-            result.reasons.append(f"-10 AI强烈不推荐")
+        # AI 说 SKIP 就要认真对待
+        if verdict == "SKIP" and ai_score < 30:
+            # AI 明确否定 → 一票否决
+            result.fatal.append(f"AI否决: 叙事不过关(AI评分{ai_score}/100) — {reason}")
+        elif verdict == "SKIP" and ai_score < 50:
+            # AI 不看好但不至于否决 → 大幅扣分
+            result.score -= 15
+            result.reasons.append(f"-15 AI不推荐(SKIP且评分{ai_score})")
+        elif verdict == "BUY" and ai_score >= 70:
+            # AI 强烈推荐 → 额外加分
+            result.score += 10
+            result.reasons.append(f"+10 AI强烈推荐")
