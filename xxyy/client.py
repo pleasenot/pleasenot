@@ -1,5 +1,6 @@
 """XXYY Open API 客户端封装"""
 import asyncio
+import time
 import httpx
 from typing import Any
 
@@ -10,6 +11,9 @@ logger = get_logger(__name__)
 
 BASE = config.api_base_url
 PREFIX = "/api/trade/open/api"
+
+# 查询缓存 TTL（秒）
+CACHE_TTL = 60  # 同一个代币 60 秒内不重复查
 
 
 class XxyyAPIError(Exception):
@@ -28,8 +32,11 @@ class XxyyClient:
         )
         # 全局请求节流：避免并发请求触发 429
         self._throttle = asyncio.Semaphore(1)
-        self._min_interval = 3.0  # 最小请求间隔（秒），信号源多了适当加大
+        self._min_interval = 3.0  # 最小请求间隔（秒）
         self._last_request = 0.0
+        # 查询结果缓存：{cache_key: (timestamp, data)}
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._max_cache = 200  # 最多缓存 200 条
 
     async def close(self):
         await self._client.aclose()
@@ -44,14 +51,47 @@ class XxyyClient:
                 await asyncio.sleep(wait)
             self._last_request = time.monotonic()
 
+    def _cache_get(self, key: str) -> Any | None:
+        """查缓存，未命中或过期返回 None"""
+        entry = self._cache.get(key)
+        if entry and (time.monotonic() - entry[0]) < CACHE_TTL:
+            return entry[1]
+        return None
+
+    def _cache_set(self, key: str, data: Any) -> None:
+        """写缓存，超限时清理最旧条目"""
+        if len(self._cache) >= self._max_cache:
+            # 删掉最旧的 1/4
+            sorted_keys = sorted(self._cache, key=lambda k: self._cache[k][0])
+            for k in sorted_keys[:self._max_cache // 4]:
+                del self._cache[k]
+        self._cache[key] = (time.monotonic(), data)
+
+    async def _request_with_retry(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """带 429 重试的请求，最多重试 3 次，指数退避"""
+        for attempt in range(4):
+            await self._wait_throttle()
+            if method == "GET":
+                resp = await self._client.get(url, **kwargs)
+            else:
+                resp = await self._client.post(url, **kwargs)
+
+            if resp.status_code != 429:
+                return resp
+
+            if attempt < 3:
+                wait = 3 * (attempt + 1)  # 3s, 6s, 9s
+                logger.debug("429 限流，%ds 后重试 (attempt %d)", wait, attempt + 1)
+                await asyncio.sleep(wait)
+
+        return resp  # 最后一次的响应
+
     async def _get(self, path: str, **params) -> Any:
-        await self._wait_throttle()
-        resp = await self._client.get(f"{PREFIX}{path}", params=params)
+        resp = await self._request_with_retry("GET", f"{PREFIX}{path}", params=params)
         return self._parse(resp)
 
     async def _post(self, path: str, body: dict) -> Any:
-        await self._wait_throttle()
-        resp = await self._client.post(f"{PREFIX}{path}", json=body)
+        resp = await self._request_with_retry("POST", f"{PREFIX}{path}", json=body)
         return self._parse(resp)
 
     def _parse(self, resp: httpx.Response) -> Any:
@@ -92,7 +132,14 @@ class XxyyClient:
     # ── 代币查询 ──────────────────────────────────────────
 
     async def query_token(self, ca: str, chain: str) -> dict:
-        return await self._get("/query", ca=ca, chain=chain)
+        cache_key = f"query:{chain}:{ca}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        result = await self._get("/query", ca=ca, chain=chain)
+        if isinstance(result, dict):
+            self._cache_set(cache_key, result)
+        return result
 
     # ── 交易 ──────────────────────────────────────────────
 
@@ -195,12 +242,19 @@ class XxyyClient:
         chain: sol | bsc
         filters: 可选过滤条件（市值、流动性、持仓人数等）
         """
+        cache_key = f"feed:{feed_type}:{chain}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         body = {"chain": chain, **(filters or {})}
         result = await self._post(f"/feed/{feed_type}", body)
         if isinstance(result, list):
+            self._cache_set(cache_key, result)
             return result
         if isinstance(result, dict):
-            return result.get("items", [])
+            items = result.get("items", [])
+            self._cache_set(cache_key, items)
+            return items
         return []
 
 
