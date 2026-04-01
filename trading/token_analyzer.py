@@ -513,13 +513,13 @@ class TokenAnalyzer:
         )
 
         # AI 说 SKIP 就要认真对待
-        if verdict == "SKIP" and ai_score < 30:
-            # AI 明确否定 → 一票否决
-            result.fatal.append(f"AI否决: 叙事不过关(AI评分{ai_score}/100) — {reason}")
-        elif verdict == "SKIP" and ai_score < 50:
-            # AI 不看好但不至于否决 → 大幅扣分
-            result.score -= 15
-            result.reasons.append(f"-15 AI不推荐(SKIP且评分{ai_score})")
+        if verdict == "SKIP" and ai_score < 20:
+            # AI 极度否定 → 一票否决（只有最垃圾的才否决）
+            result.fatal.append(f"AI否决: 叙事极差(AI评分{ai_score}/100) — {reason}")
+        elif verdict == "SKIP" and ai_score < 40:
+            # AI 不看好 → 扣分但不否决（meme 币不一定需要叙事）
+            result.score -= 5
+            result.reasons.append(f"-5 AI不推荐(评分{ai_score})")
         elif verdict == "BUY" and ai_score >= 70:
             # AI 强烈推荐 → 额外加分
             result.score += 10
