@@ -200,8 +200,8 @@ class PositionMonitor:
                 await self._check_position(pos)
             except Exception as e:
                 logger.error("check position error ca=%s: %s", pos.token_address, e)
-            # 每个持仓查完后等 3 秒，避免连续打 API 触发 429
-            await asyncio.sleep(3)
+            # DexScreener 无 rate limit，1秒间隔够了
+            await asyncio.sleep(1)
 
     async def _fetch_real_pnl(self, pos: Position) -> dict | None:
         """尝试获取真实 PNL 数据，失败返回 None"""
