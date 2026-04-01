@@ -71,14 +71,14 @@ class TokenAnalyzer:
         vol = float(trade_info.get("hourTradeVolume", 0) or 0)
         mc = float(trade_info.get("marketCapUsd", 0) or 0)
 
-        if holders < 10:
-            result.fatal.append(f"持仓人不足10({holders})，太早期")
+        if holders < 5:
+            result.fatal.append(f"持仓人不足5({holders})，太早期")
             return result
-        if vol < 2000:
-            result.fatal.append(f"1h成交量不足$2k(${vol:,.0f})，无人气")
+        if vol < 500:
+            result.fatal.append(f"1h成交量不足$500(${vol:,.0f})，无人气")
             return result
-        if mc < 3000:
-            result.fatal.append(f"市值不足$3k(${mc:,.0f})，太小")
+        if mc < 2000:
+            result.fatal.append(f"市值不足$2k(${mc:,.0f})，太小")
             return result
 
         # ── 1. 安全性检查（一票否决 + 加分）──────────────
@@ -156,14 +156,17 @@ class TokenAnalyzer:
             result.score += 10
             result.reasons.append(f"+10 持仓人数多({holders})")
         elif holders >= 200:
-            result.score += 7
-            result.reasons.append(f"+7 持仓人数不错({holders})")
-        elif holders >= 100:
-            result.score += 5
-            result.reasons.append(f"+5 持仓人数尚可({holders})")
+            result.score += 8
+            result.reasons.append(f"+8 持仓人数不错({holders})")
+        elif holders >= 50:
+            result.score += 6
+            result.reasons.append(f"+6 持仓人数尚可({holders})")
+        elif holders >= 15:
+            result.score += 4
+            result.reasons.append(f"+4 持仓人数偏少但可接受({holders})")
         else:
             result.score += 2
-            result.reasons.append(f"+2 持仓人数偏少({holders})")
+            result.reasons.append(f"+2 极早期({holders}人)")
 
         # Dev 持仓
         dev_hp = float(dev_info.get("pct", 0) or 0)
@@ -214,17 +217,20 @@ class TokenAnalyzer:
     def _check_market_cap(self, trade_info: dict, result: AnalysisResult) -> None:
         mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
 
-        # 早期介入甜区：$10k - $500k
-        if 10_000 <= mc <= 100_000:
+        # 早期介入甜区：$3k - $100k（土狗就是要早）
+        if 3_000 <= mc <= 50_000:
+            result.score += 12
+            result.reasons.append(f"+12 市值极早期甜区(${mc:,.0f})")
+        elif 50_000 < mc <= 200_000:
             result.score += 10
             result.reasons.append(f"+10 市值甜区(${mc:,.0f})")
-        elif 100_000 < mc <= 500_000:
-            result.score += 8
-            result.reasons.append(f"+8 市值适中(${mc:,.0f})")
-        elif 500_000 < mc <= 2_000_000:
-            result.score += 5
-            result.reasons.append(f"+5 市值偏高(${mc:,.0f})")
-        elif mc > 2_000_000:
+        elif 200_000 < mc <= 1_000_000:
+            result.score += 7
+            result.reasons.append(f"+7 市值适中(${mc:,.0f})")
+        elif 1_000_000 < mc <= 5_000_000:
+            result.score += 4
+            result.reasons.append(f"+4 市值偏高(${mc:,.0f})")
+        elif mc > 5_000_000:
             result.score += 2
             result.reasons.append(f"+2 市值高，上行有限(${mc:,.0f})")
         else:
@@ -242,14 +248,20 @@ class TokenAnalyzer:
             result.score += 10
             result.reasons.append(f"+10 成交量火爆(${vol:,.0f}, {trade_num}笔)")
         elif vol >= 50000:
-            result.score += 7
-            result.reasons.append(f"+7 成交量活跃(${vol:,.0f}, {trade_num}笔)")
-        elif vol >= 20000:
+            result.score += 8
+            result.reasons.append(f"+8 成交量活跃(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 10000:
+            result.score += 6
+            result.reasons.append(f"+6 成交量不错(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 2000:
             result.score += 4
             result.reasons.append(f"+4 成交量尚可(${vol:,.0f}, {trade_num}笔)")
+        elif vol >= 500:
+            result.score += 2
+            result.reasons.append(f"+2 成交量偏低但有人气(${vol:,.0f}, {trade_num}笔)")
         else:
             result.score += 0
-            result.reasons.append(f"+0 成交量偏低(${vol:,.0f}, {trade_num}笔)")
+            result.reasons.append(f"+0 成交量冷清(${vol:,.0f}, {trade_num}笔)")
 
     # ── 社交信号 ────────────────────────────────────────────
 
