@@ -297,6 +297,8 @@ class StrategyReporter:
             new_score = min(old_score + 5, 85)
             if new_score != old_score:
                 config.analyzer_min_score = new_score
+                if hasattr(self._engine, 'analyzer'):
+                    self._engine.analyzer.min_score = new_score
                 optimizations.append(f"失败率过高({len(failed)}/{len(buys)})，最低分数线 {old_score} → {new_score}")
 
         # 如果连续 3 笔都失败，降低单笔投入

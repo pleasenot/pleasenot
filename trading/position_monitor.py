@@ -238,9 +238,13 @@ class PositionMonitor:
 
         # 记录初始动量数据
         if not pos.volume_recorded:
-            pos.initial_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
-            pos.initial_holders = int(trade_info.get("holder", 0) or 0)
-            pos.volume_recorded = True
+            vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+            holders = int(trade_info.get("holder", 0) or 0)
+            # API 返回 0 时不标记已记录，下次重试
+            if vol > 0 or holders > 0:
+                pos.initial_volume = vol
+                pos.initial_holders = holders
+                pos.volume_recorded = True
 
         # 更新历史最高价
         if current_price > pos.highest_price:
@@ -327,6 +331,10 @@ class PositionMonitor:
     async def _check_trailing_stop(self, pos: Position, current_price: float, multiplier: float) -> None:
         """从最高点回撤一定比例 → 全部卖出锁利"""
         if not pos.trailing_active or pos.highest_price <= 0:
+            return
+
+        # 移动止盈只在盈利 1.5x 以上才生效，防止刚 TP 就被小波动触发清仓
+        if multiplier < 1.5:
             return
 
         drop_from_high = 1 - (current_price / pos.highest_price)
@@ -785,10 +793,20 @@ class PositionMonitor:
                 await asyncio.sleep(3)
 
             if stale:
-                stale_cas = {p.token_address for p in stale}
                 for p in stale:
                     logger.info("清理已卖出持仓 ca=%s (链上已无余额)", p.token_address[:16])
-                self._positions = [p for p in self._positions if p.token_address not in stale_cas]
+                    p.status = "closed"
+                    # 记录到墓地（方便复活扫描）
+                    self._graveyard[p.token_address] = {
+                        "sell_time": time.time(),
+                        "sell_price": p.highest_price or p.entry_price,
+                        "chain": p.chain,
+                        "reason": "链上同步清理",
+                    }
+                    # 记录盈亏到安全护栏
+                    if self._safety and p.entry_price > 0 and p.buy_amount > 0:
+                        self._safety.record_loss(p.buy_amount)
+                self._positions = [p for p in self._positions if p.status != "closed"]
                 logger.info("清理完成，移除 %d 个已卖出持仓", len(stale))
 
             # ── 第2步：发现新持仓（Solana RPC 扫描全量代币）──

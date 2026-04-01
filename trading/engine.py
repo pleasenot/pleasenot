@@ -95,6 +95,8 @@ class TradingEngine:
                 await self._process_signal(signal)
             except Exception as e:
                 logger.error("信号处理异常 ca=%s: %s", signal.token_address, e)
+                # 处理失败，清除去重缓存让信号可以重试
+                self._signal_seen.pop(signal.token_address, None)
             finally:
                 self._processing.discard(signal.token_address)
                 self._signal_queue.task_done()
@@ -211,8 +213,12 @@ class TradingEngine:
                     or (wallet_info or {}).get("solBalance", 0)
                     or 0
                 )
-            except Exception:
-                sol_balance = 0.0
+            except Exception as e:
+                logger.warning("查询钱包余额失败，使用缓存余额: %s", e)
+                sol_balance = getattr(self, '_cached_balance', 0.0)
+
+            if sol_balance > 0:
+                self._cached_balance = sol_balance
 
             # 计算信号强度
             hit_info = self._signal_hits.get(signal.token_address)

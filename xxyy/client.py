@@ -13,7 +13,7 @@ BASE = config.api_base_url
 PREFIX = "/api/trade/open/api"
 
 # 查询缓存 TTL（秒）
-CACHE_TTL = 60  # 同一个代币 60 秒内不重复查
+CACHE_TTL = 15  # 同一个代币 15 秒内不重复查（配合 position monitor 15s 检查间隔）
 
 
 class XxyyAPIError(Exception):
@@ -300,8 +300,8 @@ class XxyyClient:
     async def get_trade(self, tx_id: str) -> dict:
         return await self._get("/trade", txId=tx_id)
 
-    async def wait_trade(self, tx_id: str, retries: int = 3, interval: int = 5) -> dict:
-        """轮询交易状态，最多重试 retries 次，每次间隔 interval 秒。"""
+    async def wait_trade(self, tx_id: str, retries: int = 12, interval: int = 5) -> dict:
+        """轮询交易状态，最多重试 retries 次（默认60秒），每次间隔 interval 秒。"""
         for i in range(retries):
             result = await self.get_trade(tx_id)
             status = result.get("status") if isinstance(result, dict) else None
