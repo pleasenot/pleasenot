@@ -564,7 +564,8 @@ class PositionMonitor:
     async def _sync_onchain_holdings(self) -> None:
         """
         启动时从 Solana 链上查询钱包实际持仓，
-        把 positions.json 里没有但链上有的代币自动加入监控。
+        1. 删除 positions.json 里有但链上已不存在的代币（已卖出）
+        2. 添加链上有但 positions.json 里没有的代币（新买入）
         """
         wallet = config.wallet_address
         if not wallet:
@@ -574,10 +575,9 @@ class PositionMonitor:
             import httpx
 
             rpc_url = "https://api.mainnet-beta.solana.com"
-            known_cas = {p.token_address for p in self._positions}
-            new_count = 0
+            onchain_mints: set[str] = set()  # 链上实际持有的代币
 
-            # 查 Token-2022 (大部分 PumpFun 币用这个)
+            # 查询链上所有代币持仓
             for program_id in [
                 "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
                 "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
@@ -600,43 +600,58 @@ class PositionMonitor:
                         mint = info.get("mint", "")
                         ui_amount = info.get("tokenAmount", {}).get("uiAmount", 0)
 
-                        if not mint or not ui_amount or ui_amount <= 0:
-                            continue
-                        if mint in known_cas:
-                            continue
+                        if mint and ui_amount and ui_amount > 0:
+                            onchain_mints.add(mint)
 
-                        # 查询当前价格作为入场价
-                        try:
-                            token_data = await client.query_token(mint, "sol")
-                            if not isinstance(token_data, dict):
-                                continue
-                            ti = token_data.get("tradeInfo") or {}
-                            price = float(ti.get("price", 0) or 0)
-                            if price <= 0:
-                                continue
+            # ── 第1步：清理已卖出的持仓 ──
+            before_count = len(self._positions)
+            stale = [p for p in self._positions if p.token_address not in onchain_mints]
+            if stale:
+                for p in stale:
+                    logger.info("清理已卖出持仓 ca=%s (链上已无余额)", p.token_address[:16])
+                self._positions = [p for p in self._positions if p.token_address in onchain_mints]
+                logger.info("清理完成，移除 %d 个已卖出持仓", len(stale))
 
-                            name = token_data.get("baseSymbol") or "?"
-                            pos = Position(
-                                chain="sol",
-                                token_address=mint,
-                                wallet_address=wallet,
-                                entry_price=price,
-                                tip=config.tip,
-                                entry_time=time.time(),
-                            )
-                            self._positions.append(pos)
-                            known_cas.add(mint)
-                            new_count += 1
-                            logger.info("链上同步新持仓 %s ca=%s price=$%.8f", name, mint[:12], price)
-                        except Exception as e:
-                            logger.debug("sync token query error ca=%s: %s", mint[:12], e)
-                        await asyncio.sleep(3)
+            # ── 第2步：添加链上新持仓 ──
+            known_cas = {p.token_address for p in self._positions}
+            new_count = 0
 
-            if new_count > 0:
+            for mint in onchain_mints:
+                if mint in known_cas:
+                    continue
+
+                try:
+                    token_data = await client.query_token(mint, "sol")
+                    if not isinstance(token_data, dict):
+                        continue
+                    ti = token_data.get("tradeInfo") or {}
+                    price = float(ti.get("price", 0) or 0)
+                    if price <= 0:
+                        continue
+
+                    name = token_data.get("baseSymbol") or "?"
+                    pos = Position(
+                        chain="sol",
+                        token_address=mint,
+                        wallet_address=wallet,
+                        entry_price=price,
+                        tip=config.tip,
+                        entry_time=time.time(),
+                    )
+                    self._positions.append(pos)
+                    known_cas.add(mint)
+                    new_count += 1
+                    logger.info("链上同步新持仓 %s ca=%s price=$%.8f", name, mint[:12], price)
+                except Exception as e:
+                    logger.debug("sync token query error ca=%s: %s", mint[:12], e)
+                await asyncio.sleep(3)
+
+            changed = len(stale) > 0 or new_count > 0
+            if changed:
                 self.save_positions()
-                logger.info("链上同步完成，新增 %d 个持仓", new_count)
+                logger.info("链上同步完成，移除 %d / 新增 %d", len(stale), new_count)
             else:
-                logger.info("链上同步完成，无新增持仓")
+                logger.info("链上同步完成，无变动")
 
         except Exception as e:
             logger.error("链上持仓同步失败: %s", e)
