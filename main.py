@@ -82,7 +82,20 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         logger.info("名人推文 + KOL 跟单监控已启动")
 
     logger.info("Bot 已启动，dry_run=%s", dry_run)
-    await asyncio.gather(*tasks)
+
+    # 用 return_exceptions=True 防止单个 task 崩溃导致整体退出
+    # 加一个永久存活的 keepalive 确保 gather 永不返回
+    async def _keepalive():
+        while True:
+            await asyncio.sleep(3600)
+
+    tasks.append(asyncio.create_task(_keepalive()))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # 如果走到这里说明有 task 异常退出了，记录并让守护脚本重启
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            logger.error("Task %d 异常退出: %s", i, r)
 
 
 def main():

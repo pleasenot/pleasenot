@@ -98,7 +98,7 @@ class TwitterScanner(BaseSignalSource):
             asyncio.create_task(self._poll_kol_buys(on_signal)),
             asyncio.create_task(self._poll_twitter_api(on_signal)),
         ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── XXYY KOL 买入跟单 ──────────────────────────────────
 

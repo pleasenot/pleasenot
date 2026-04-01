@@ -59,7 +59,7 @@ class SocialTrendScanner(BaseSignalSource):
             asyncio.create_task(self._poll_tiktok()),
             asyncio.create_task(self._match_feed_tokens(on_signal)),
         ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── Reddit 热帖扫描 ─────────────────────────────────────
 
