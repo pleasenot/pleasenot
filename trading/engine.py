@@ -67,7 +67,7 @@ class TradingEngine:
         self.tip = tip or config.tip
         self.on_result = on_result
         self._history: list[TradeRecord] = []
-        self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
+        self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap（买入+卖出共享）
         self._analysis_sem = asyncio.Semaphore(self.CONCURRENT_ANALYSES)  # 并发分析限制
         self._signal_queue: asyncio.Queue = asyncio.Queue()
         self._processing: set[str] = set()  # 正在处理的 CA，防止并发分析同一个币
@@ -75,7 +75,7 @@ class TradingEngine:
         self._signal_seen: dict[str, float] = {}  # 跨信号源去重 {ca: timestamp}
         # 信号强度追踪：{ca: {source1, source2, ...}}，记录每个 CA 被哪些信号源命中
         self._signal_hits: dict[str, dict] = {}  # {ca: {"sources": set, "first_seen": float}}
-        self.position_monitor = PositionMonitor()
+        self.position_monitor = PositionMonitor(swap_lock=self._swap_lock)
         self.analyzer = TokenAnalyzer()
         self.safety = SafetyGuard()
         self.position_monitor.set_safety(self.safety)

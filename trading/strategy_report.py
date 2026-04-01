@@ -316,7 +316,10 @@ class StrategyReporter:
                 self._engine.safety.pause("长时间无成功交易，自动暂停10分钟观察")
                 optimizations.append("长时间无成功交易，暂停买入10分钟")
                 # 10分钟后自动恢复
-                asyncio.get_event_loop().call_later(600, self._engine.safety.resume)
+                async def _auto_resume():
+                    await asyncio.sleep(600)
+                    self._engine.safety.resume()
+                asyncio.create_task(_auto_resume())
 
         return optimizations
 
@@ -360,6 +363,25 @@ class StrategyReporter:
         except Exception as e:
             lines.append(f"  查询失败: {e}")
 
+    async def _get_sol_price(self) -> float:
+        """从 DexScreener 获取 SOL/USD 实时价格，失败时返回缓存值"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
+                resp = await http.get(
+                    "https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112"
+                )
+                if resp.status_code == 200:
+                    pairs = resp.json().get("pairs") or []
+                    if pairs:
+                        price = float(pairs[0].get("priceUsd", 0) or 0)
+                        if price > 0:
+                            self._sol_price_cache = price
+                            return price
+        except Exception:
+            pass
+        return getattr(self, '_sol_price_cache', 150.0)
+
     async def _calc_pnl(self, positions: list) -> dict:
         """计算总盈亏：已实现 + 未实现"""
         result = {
@@ -373,27 +395,26 @@ class StrategyReporter:
             'avg_loss': 0.0,
         }
 
+        sol_price = await self._get_sol_price()
         wins = []
         losses = []
 
         for pos in positions:
-            # 估算成本（entry_price * 假设数量，用 buy_amount / entry_price 估算）
-            # 由于没记录精确数量，用比例计算盈亏
             current_price = await self._get_current_price(pos) if pos.status != "closed" else 0
             entry = pos.entry_price
 
             if entry <= 0:
                 continue
 
+            # 用实际买入金额，没有则 fallback 到 config
+            buy_sol = pos.buy_amount if pos.buy_amount > 0 else config.buy_amount
+
             if pos.status == "closed":
-                # 已平仓 — 用 sell_log 里的信息估算
-                # 简化：用 highest_price 和 entry 的关系估算
                 if pos.highest_price > 0:
                     pnl_ratio = (pos.highest_price / entry - 1)
                 else:
-                    pnl_ratio = -0.5  # 默认假设亏50%（止损）
-                # 假设每笔买入 0.03 SOL（当前配置），换算美元
-                cost_usd = config.buy_amount * 170  # 粗估 SOL 价格
+                    pnl_ratio = -0.5
+                cost_usd = buy_sol * sol_price
                 pnl_usd = cost_usd * pnl_ratio
                 result['realized_pnl'] += pnl_usd
                 result['total_cost'] += cost_usd
@@ -402,10 +423,9 @@ class StrategyReporter:
                 else:
                     losses.append(abs(pnl_ratio))
             else:
-                # 未平仓 — 用当前价格算浮盈浮亏
                 if current_price > 0:
                     pnl_ratio = (current_price / entry - 1)
-                    cost_usd = config.buy_amount * 170
+                    cost_usd = buy_sol * sol_price
                     result['unrealized_pnl'] += cost_usd * pnl_ratio
                     result['holding_value'] += cost_usd * (1 + pnl_ratio)
                     result['total_cost'] += cost_usd

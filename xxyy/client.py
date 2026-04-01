@@ -388,16 +388,21 @@ class XxyyClient:
 
     # ── Feed 扫描 ─────────────────────────────────────────
 
-    async def feed(self, feed_type: str = "NEW", chain: str = "sol", filters: dict | None = None) -> list[dict]:
+    async def feed(
+        self, feed_type: str = "NEW", chain: str = "sol",
+        filters: dict | None = None, skip_cache: bool = False,
+    ) -> list[dict]:
         """
         feed_type: NEW | ALMOST | COMPLETED
         chain: sol | bsc
         filters: 可选过滤条件（市值、流动性、持仓人数等）
+        skip_cache: 高频扫描器设为 True 跳过缓存
         """
         cache_key = f"feed:{feed_type}:{chain}"
-        cached = self._cache_get(cache_key)
-        if cached is not None:
-            return cached
+        if not skip_cache:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
         body = {"chain": chain, **(filters or {})}
         result = await self._post(f"/feed/{feed_type}", body)
         if isinstance(result, list):

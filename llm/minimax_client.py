@@ -6,6 +6,8 @@ MiniMax 大模型客户端
 - 判断项目叙事逻辑是否成立
 - 识别垃圾关键词堆砌的空气币
 """
+import json
+import re
 import httpx
 from config import config
 from utils.logger import get_logger
@@ -13,6 +15,15 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 MINIMAX_API_URL = "https://api.minimaxi.com/v1/text/chatcompletion_v2"
+
+
+def _parse_ai_json(raw: str) -> dict:
+    """解析 AI 返回的 JSON，兼容 ```json 代码块包裹"""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```\s*$", "", raw)
+    return json.loads(raw)
 
 SYSTEM_PROMPT = """你是一个加密货币 Meme Coin 分析专家，专注于 AI 和量子计算相关的叙事币。
 
@@ -116,9 +127,8 @@ class MiniMaxClient:
                 .get("content", "")
             )
 
-            # 解析 JSON 响应
-            import json
-            result = json.loads(content.strip())
+            # 解析 JSON 响应（兼容 ```json 代码块包裹）
+            result = _parse_ai_json(content)
             logger.info(
                 "MiniMax 分析 %s(%s): score=%d verdict=%s reason=%s",
                 name, symbol, result.get("score", 0),
@@ -221,8 +231,7 @@ class MiniMaxClient:
                 .get("content", "")
             )
 
-            import json
-            result = json.loads(content.strip())
+            result = _parse_ai_json(content)
             logger.info(
                 "MiniMax 持仓分析 %s(%s): action=%s confidence=%d reason=%s",
                 name, symbol, result.get("action", "?"),
@@ -300,8 +309,7 @@ class MiniMaxClient:
                 .get("content", "")
             )
 
-            import json
-            result = json.loads(content.strip())
+            result = _parse_ai_json(content)
             logger.info(
                 "MiniMax 深度分析: action=%s confidence=%d reason=%s",
                 result.get("action", "?"),

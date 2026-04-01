@@ -102,9 +102,9 @@ class Position:
 
 
 class PositionMonitor:
-    def __init__(self):
+    def __init__(self, swap_lock: asyncio.Semaphore | None = None):
         self._positions: list[Position] = []
-        self._swap_lock = asyncio.Semaphore(1)
+        self._swap_lock = swap_lock or asyncio.Semaphore(1)
         self._running = False
         self._safety = None  # 由 engine 注入
         # 墓地：已卖出的币 {ca: {"sell_time": float, "sell_price": float, "chain": str}}
@@ -534,7 +534,15 @@ class PositionMonitor:
             logger.info("卖出提交[%s] txId=%s ca=%s %d%%", reason, tx_id, pos.token_address, sell_percent)
 
             # swap 已提交到链上，查询结果
-            result = await client.wait_trade(tx_id)
+            try:
+                result = await client.wait_trade(tx_id)
+            except Exception as e:
+                # 网络异常无法确认链上状态，不能重试（可能已成功），保守处理
+                logger.warning(
+                    "⚠️ 卖出状态查询异常[%s] ca=%s txId=%s: %s，不重试避免重复卖出",
+                    reason, pos.token_address, tx_id, e,
+                )
+                return False
             raw_status = result.get("status") if isinstance(result, dict) else None
 
             if raw_status == 2:
@@ -556,7 +564,7 @@ class PositionMonitor:
                                     logger.info("PNL真实亏损 ca=%s pnl=%.4f SOL", pos.token_address[:12], real_loss)
                         except Exception:
                             pass
-                            actual_buy = pos.buy_amount if pos.buy_amount > 0 else config.buy_amount
+                        actual_buy = pos.buy_amount if pos.buy_amount > 0 else config.buy_amount
                         loss = real_loss if real_loss is not None else actual_buy * (1.0 - multiplier) * (sell_percent / 100.0)
                         self._safety.record_loss(loss)
                     else:
@@ -792,6 +800,12 @@ class PositionMonitor:
                             onchain_mints.add(mint)
 
             # ── 第1步：清理已卖出的持仓 ──
+            # 安全检查：如果 RPC 返回空数据（网络故障/rate limit），跳过清理防止误删
+            open_positions = [p for p in self._positions if p.status != "closed"]
+            if not onchain_mints and open_positions:
+                logger.warning("链上同步: RPC 返回空数据，跳过清理防止误删 (%d 个持仓)", len(open_positions))
+                return
+
             before_count = len(self._positions)
             stale = [p for p in self._positions if p.token_address not in onchain_mints]
             if stale:
