@@ -71,14 +71,14 @@ class TokenAnalyzer:
         vol = float(trade_info.get("hourTradeVolume", 0) or 0)
         mc = float(trade_info.get("marketCapUsd", 0) or 0)
 
-        if holders < 30:
-            result.fatal.append(f"持仓人不足30({holders})，太早期")
+        if holders < 10:
+            result.fatal.append(f"持仓人不足10({holders})，太早期")
             return result
-        if vol < 5000:
-            result.fatal.append(f"1h成交量不足$5k(${vol:,.0f})，无人气")
+        if vol < 2000:
+            result.fatal.append(f"1h成交量不足$2k(${vol:,.0f})，无人气")
             return result
-        if mc < 5000:
-            result.fatal.append(f"市值不足$5k(${mc:,.0f})，太小")
+        if mc < 3000:
+            result.fatal.append(f"市值不足$3k(${mc:,.0f})，太小")
             return result
 
         # ── 1. 安全性检查（一票否决 + 加分）──────────────
