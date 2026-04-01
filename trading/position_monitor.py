@@ -61,6 +61,9 @@ DEAD_COIN_VOLUME = 50           # 1h 成交量低于 $50
 AI_ANALYSIS_INTERVAL = 300      # 每 5 分钟做一次 AI 分析
 AI_SELL_CONFIDENCE = 75         # AI 说 SELL 且 confidence >= 75 才执行
 
+# ── 链上同步 ────────────────────────────────────────────
+ONCHAIN_SYNC_INTERVAL = 120     # 每 2 分钟同步一次链上持仓
+
 
 @dataclass
 class Position:
@@ -155,9 +158,16 @@ class PositionMonitor:
 
         # 启动时同步链上持仓
         await self._sync_onchain_holdings()
+        self._last_sync_time = time.time()
 
         while self._running:
             await self._check_all()
+
+            # 定期同步链上持仓（清理已卖出的）
+            if time.time() - self._last_sync_time >= ONCHAIN_SYNC_INTERVAL:
+                await self._sync_onchain_holdings()
+                self._last_sync_time = time.time()
+
             await asyncio.sleep(PRICE_CHECK_INTERVAL)
 
     def stop(self) -> None:
