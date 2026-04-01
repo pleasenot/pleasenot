@@ -871,14 +871,21 @@ class PositionMonitor:
                     if mint in known_cas:
                         continue
                     try:
-                        token_data = await client.query_token(mint, chain)
-                        if not isinstance(token_data, dict):
-                            continue
-                        ti = token_data.get("tradeInfo") or {}
-                        price = float(ti.get("price", 0) or 0)
+                        # 用 DexScreener SOL 计价（和止盈逻辑一致）
+                        price = await self._get_dexscreener_price_sol(mint)
+                        if price <= 0:
+                            # fallback: XXYY query_token
+                            token_data = await client.query_token(mint, chain)
+                            ti = (token_data or {}).get("tradeInfo") or {} if isinstance(token_data, dict) else {}
+                            price = float(ti.get("price", 0) or 0)
                         if price <= 0:
                             continue
-                        name = token_data.get("baseSymbol") or "?"
+                        name = "?"
+                        try:
+                            td = await client.query_token(mint, chain)
+                            name = (td or {}).get("baseSymbol") or "?"
+                        except Exception:
+                            pass
                         pos = Position(
                             chain=chain,
                             token_address=mint,
@@ -890,7 +897,7 @@ class PositionMonitor:
                         self._positions.append(pos)
                         known_cas.add(mint)
                         new_count += 1
-                        logger.info("链上同步新持仓 %s ca=%s price=$%.8f", name, mint[:12], price)
+                        logger.info("链上同步新持仓 %s ca=%s price=%.10f(SOL)", name, mint[:12], price)
                     except Exception as e:
                         logger.debug("sync token query error ca=%s: %s", mint[:12], e)
                     await asyncio.sleep(3)
