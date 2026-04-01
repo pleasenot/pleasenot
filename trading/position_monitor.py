@@ -41,7 +41,7 @@ TRAILING_STOP_DROP = 0.30       # 从最高点回撤30%才触发（给波动空�
 TRAILING_SELL_PERCENT = 100     # 移动止盈触发后全部卖出
 
 # ── 时间止损 ─────────────────────────────────────────────
-TIME_STOP_MINUTES = 45          # 给45分钟发酵期，meme币需要时间
+TIME_STOP_MINUTES = 90          # 给90分钟发酵期，meme币需要充足时间找受众
 TIME_STOP_MIN_MULTIPLIER = 1.0  # 45分钟不亏就留着（不要求涨）
 TIME_STOP_SELL_PERCENT = 100
 
@@ -136,13 +136,15 @@ class PositionMonitor:
                 ca = h.get("tokenAddress") or h.get("address") or ""
                 if not ca or ca in known_cas:
                     continue
-                # 查询当前价格作为"入场价"（保守估计，用于止损判断）
-                try:
-                    data = await client.query_token(ca, chain)
-                    trade_info = (data or {}).get("tradeInfo") or {} if isinstance(data, dict) else {}
-                    price = float(trade_info.get("price", 0) or 0)
-                except Exception:
-                    price = 0.0
+                # 查询 SOL 计价入场价（和止盈/止损单位一致）
+                price = await self._get_dexscreener_price_sol(ca)
+                if price <= 0:
+                    try:
+                        data = await client.query_token(ca, chain)
+                        trade_info = (data or {}).get("tradeInfo") or {} if isinstance(data, dict) else {}
+                        price = float(trade_info.get("price", 0) or 0)
+                    except Exception:
+                        price = 0.0
                 if price <= 0:
                     continue
                 pos = Position(
@@ -218,7 +220,7 @@ class PositionMonitor:
         return None
 
     async def _get_dexscreener_price_sol(self, token_address: str) -> float:
-        """从 DexScreener 获取 SOL 计价的实时价格（meme 币用 SOL 计价才准）"""
+        """从 DexScreener 获取 SOL 计价的实时价格"""
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
@@ -227,32 +229,36 @@ class PositionMonitor:
                 )
                 if resp.status_code == 200:
                     pairs = resp.json().get("pairs") or []
-                    if pairs:
-                        # 优先用 SOL 计价（priceNative），和 XXYY P&L 一致
-                        native = float(pairs[0].get("priceNative", 0) or 0)
-                        if native > 0:
-                            return native
-                        # fallback: 用 USD 价格 / SOL 价格 算出 SOL 计价
-                        usd = float(pairs[0].get("priceUsd", 0) or 0)
-                        if usd > 0:
-                            return usd  # 退化为 USD（不理想但总比没有好）
+                    if not pairs:
+                        return 0.0
+                    # 优先选 SOL 计价的 pair（quoteToken 是 SOL/WSOL）
+                    sol_mints = {"So11111111111111111111111111111111111111112"}
+                    sol_pair = None
+                    for p in pairs:
+                        qt = p.get("quoteToken") or {}
+                        if qt.get("address") in sol_mints or qt.get("symbol") in ("SOL", "WSOL"):
+                            sol_pair = p
+                            break
+                    pair = sol_pair or pairs[0]
+                    native = float(pair.get("priceNative", 0) or 0)
+                    if native > 0:
+                        return native
         except Exception:
             pass
         return 0.0
 
     async def _check_position(self, pos: Position) -> None:
         # 用 DexScreener SOL 计价价格（和 XXYY P&L 一致）
+        # 不用 XXYY query_token 的 USD 价格做 fallback（单位不同会导致错误止损）
         current_price = await self._get_dexscreener_price_sol(pos.token_address)
+        if current_price <= 0:
+            return  # DexScreener 查不到就跳过本轮，不用 USD 价格混入
 
+        # query_token 仍用于获取 trade_info（成交量、持仓人等非价格数据）
         data = await client.query_token(pos.token_address, pos.chain)
         if not isinstance(data, dict):
             data = {}
         trade_info = data.get("tradeInfo") or {}
-
-        if current_price <= 0:
-            current_price = float(trade_info.get("price", 0) or 0)
-        if current_price <= 0:
-            return
 
         # 待定价格补偿
         if pos.entry_price < 0:
@@ -830,9 +836,7 @@ class PositionMonitor:
                         "chain": p.chain,
                         "reason": "链上同步清理",
                     }
-                    # 记录盈亏到安全护栏
-                    if self._safety and p.entry_price > 0 and p.buy_amount > 0:
-                        self._safety.record_loss(p.buy_amount)
+                    # 不记录亏损（实际卖出在 _sell 里已正确记录，这里是清理残留）
                 self._positions = [p for p in self._positions if p.status != "closed"]
                 logger.info("清理完成，移除 %d 个已卖出持仓", len(stale))
 

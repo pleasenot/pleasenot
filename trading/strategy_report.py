@@ -444,12 +444,22 @@ class StrategyReporter:
         return result
 
     async def _get_current_price(self, pos) -> float:
-        """获取当前价格"""
+        """获取 SOL 计价的当前价格（和 position_monitor 一致）"""
         try:
-            data = await client.query_token(pos.token_address, pos.chain)
-            if isinstance(data, dict):
-                trade_info = data.get("tradeInfo") or {}
-                return float(trade_info.get("price", 0) or 0)
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
+                resp = await http.get(
+                    f"https://api.dexscreener.com/latest/dex/tokens/{pos.token_address}"
+                )
+                if resp.status_code == 200:
+                    pairs = resp.json().get("pairs") or []
+                    sol_mints = {"So11111111111111111111111111111111111111112"}
+                    for p in pairs:
+                        qt = p.get("quoteToken") or {}
+                        if qt.get("address") in sol_mints or qt.get("symbol") in ("SOL", "WSOL"):
+                            return float(p.get("priceNative", 0) or 0)
+                    if pairs:
+                        return float(pairs[0].get("priceNative", 0) or 0)
         except Exception:
             pass
         return 0.0
