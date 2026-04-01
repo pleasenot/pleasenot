@@ -208,8 +208,15 @@ class PositionMonitor:
 
         trade_info = data.get("tradeInfo") or {}
         current_price = float(trade_info.get("price", 0) or 0)
-        if current_price <= 0 or pos.entry_price <= 0:
+        if current_price <= 0:
             return
+
+        # 待定价格补偿：entry_price < 0 说明买入时没查到价格，用第一次查到的价格补上
+        if pos.entry_price < 0:
+            pos.entry_price = current_price
+            logger.info("🔧 补偿入场价格 ca=%s entry=$%.8f", pos.token_address, current_price)
+            self.save_positions()
+            return  # 本轮不做止盈判断，下一轮开始正常监控
 
         multiplier = current_price / pos.entry_price
 
@@ -495,6 +502,7 @@ class PositionMonitor:
                         tip=pos.tip,
                     )
             except XxyyAPIError as e:
+                # API 调用失败 = 交易还没提交到链上，可以安全重试
                 logger.error("卖出API失败[%s] ca=%s attempt=%d/%d error=%s",
                              reason, pos.token_address, attempt, self.SELL_RETRY_MAX, e)
                 if attempt < self.SELL_RETRY_MAX:
@@ -504,17 +512,17 @@ class PositionMonitor:
 
             logger.info("卖出提交[%s] txId=%s ca=%s %d%%", reason, tx_id, pos.token_address, sell_percent)
 
+            # swap 已提交到链上，查询结果
             result = await client.wait_trade(tx_id)
             raw_status = result.get("status") if isinstance(result, dict) else None
+
             if raw_status == 2:
                 logger.info(
                     "✅ 卖出成功[%s] ca=%s %d%% txId=%s",
                     reason, pos.token_address, sell_percent, tx_id,
                 )
-                # 记录亏损到安全护栏（仅在亏损时）
                 if self._safety and "止损" in reason:
                     self._safety.record_loss(0.05)
-                # 卖出 100% 时加入墓地，后续定期回查复活
                 if sell_percent == 100:
                     self._graveyard[pos.token_address] = {
                         "sell_time": time.time(),
@@ -524,17 +532,24 @@ class PositionMonitor:
                     }
                     logger.info("🪦 加入墓地监控 ca=%s reason=%s", pos.token_address[:16], reason)
                 self.save_positions()
-                # 写入交易信号汇总
                 self._log_sell_signal(pos, sell_percent, reason, tx_id)
                 return True
-            else:
+            elif raw_status == 3:
+                # 链上明确失败（滑点等），可以安全重试
                 logger.error(
-                    "❌ 卖出链上失败[%s] ca=%s attempt=%d/%d txId=%s status=%s",
-                    reason, pos.token_address, attempt, self.SELL_RETRY_MAX, tx_id, raw_status,
+                    "❌ 卖出链上失败[%s] ca=%s attempt=%d/%d txId=%s",
+                    reason, pos.token_address, attempt, self.SELL_RETRY_MAX, tx_id,
                 )
                 if attempt < self.SELL_RETRY_MAX:
                     await asyncio.sleep(self.SELL_RETRY_DELAY)
                     continue
+                return False
+            else:
+                # 状态未知（None/pending）= 交易可能已在链上，不能重试，避免重复卖出
+                logger.warning(
+                    "⚠️ 卖出状态未知[%s] ca=%s txId=%s status=%s，不重试避免重复卖出",
+                    reason, pos.token_address, tx_id, raw_status,
+                )
                 return False
 
         return False
@@ -561,7 +576,7 @@ class PositionMonitor:
     SAVE_FILE = "positions.json"
 
     def save_positions(self) -> None:
-        """保存持仓到文件，重启后可恢复"""
+        """保存持仓到文件，重启后可恢复。先写临时文件再原子替换，防止损坏。"""
         data = []
         for p in self._positions:
             if p.status == "closed":
@@ -578,8 +593,15 @@ class PositionMonitor:
                 "trailing_active": p.trailing_active,
                 "entry_time": p.entry_time,
             })
-        with open(self.SAVE_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        # 先写临时文件，成功后再原子替换，避免写一半崩溃导致 JSON 损坏
+        tmp_file = self.SAVE_FILE + ".tmp"
+        try:
+            with open(tmp_file, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_file, self.SAVE_FILE)  # 原子操作
+        except Exception as e:
+            logger.error("保存持仓失败: %s", e)
+            return
         logger.debug("持仓已保存到 %s (%d 个)", self.SAVE_FILE, len(data))
 
     def load_positions(self) -> int:

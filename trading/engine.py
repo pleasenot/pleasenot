@@ -268,12 +268,12 @@ class TradingEngine:
                         )
                         await asyncio.sleep(self.REGISTER_RETRY_DELAY)
                         continue
-                    # 最后一次仍失败，用买入金额估算一个价格，宁可不准也不丢仓位
+                    # 最后一次仍失败，标记价格待定（-1），让 monitor 下次 check 时补上真实价格
                     logger.error(
-                        "⚠️ 无法获取入场价格 ca=%s，使用备用价格登记仓位",
+                        "⚠️ 无法获取入场价格 ca=%s，标记待定，等 monitor 补价",
                         record.signal.token_address,
                     )
-                    entry_price = 1e-10  # 极小值，确保任何涨幅都能触发止盈
+                    entry_price = -1.0  # 待定标记，monitor 首次查到价格时会补上
                 pos = Position(
                     chain=record.signal.chain,
                     token_address=record.signal.token_address,
@@ -292,16 +292,16 @@ class TradingEngine:
                     )
                     await asyncio.sleep(self.REGISTER_RETRY_DELAY)
                 else:
-                    # 最终兜底：用极小价格登记，确保仓位不丢
+                    # 最终兜底：标记价格待定，确保仓位不丢
                     logger.error(
-                        "⚠️ 仓位登记最终失败 ca=%s，使用备用价格强制登记: %s",
+                        "⚠️ 仓位登记最终失败 ca=%s，标记待定强制登记: %s",
                         record.signal.token_address, e,
                     )
                     pos = Position(
                         chain=record.signal.chain,
                         token_address=record.signal.token_address,
                         wallet_address=self.wallet_address,
-                        entry_price=1e-10,
+                        entry_price=-1.0,
                         tip=self.tip,
                     )
                     self.position_monitor.add(pos)
