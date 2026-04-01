@@ -152,50 +152,84 @@ class TradingEngine:
         else:
             amount = float(self.sell_percent)
 
-        try:
-            async with self._swap_lock:
-                tx_id = await client.swap(
-                    chain=signal.chain,
-                    wallet_address=self.wallet_address,
-                    token_address=signal.token_address,
-                    is_buy=is_buy,
-                    amount=amount,
-                    tip=self.tip,
-                )
-        except XxyyAPIError as e:
-            logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)
-            if is_buy:
-                self.safety.record_failure()
-            return None
+        # ── 买入重试机制：最多重试 BUY_RETRY_MAX 次 ──────────────
+        max_attempts = self.BUY_RETRY_MAX if is_buy else 1
 
-        record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
-        if is_buy:
-            record.score = analysis.score
-            record.tier = self._get_tier_name(analysis.score)
-        self._history.append(record)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with self._swap_lock:
+                    tx_id = await client.swap(
+                        chain=signal.chain,
+                        wallet_address=self.wallet_address,
+                        token_address=signal.token_address,
+                        is_buy=is_buy,
+                        amount=amount,
+                        tip=self.tip,
+                    )
+            except XxyyAPIError as e:
+                logger.error("swap API 失败 ca=%s attempt=%d/%d error=%s",
+                             signal.token_address, attempt, max_attempts, e)
+                if is_buy and attempt < max_attempts:
+                    logger.info("⏳ %d秒后重试买入 ca=%s", self.BUY_RETRY_DELAY, signal.token_address)
+                    await asyncio.sleep(self.BUY_RETRY_DELAY)
+                    continue
+                if is_buy:
+                    self.safety.record_failure()
+                return None
 
-        # 异步轮询结果，不阻塞主循环
-        asyncio.create_task(self._poll_result(record))
-        return record
+            # swap 提交成功，轮询链上结果
+            result = await self._wait_trade_result(tx_id)
+            status = result.get("status") if isinstance(result, dict) else None
 
-    async def _poll_result(self, record: TradeRecord) -> None:
-        try:
-            result = await client.wait_trade(record.tx_id)
-            record.result = result if isinstance(result, dict) else {}
-            raw_status = record.result.get("status")
-            if raw_status == 2:
+            if status == 2:
+                # 链上成功
+                record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
+                if is_buy:
+                    record.score = analysis.score
+                    record.tier = self._get_tier_name(analysis.score)
                 record.status = "success"
-            elif raw_status == 3:
-                record.status = "failed"
-            else:
-                record.status = "unknown"
-            logger.info(
-                "交易完成 txId=%s status=%s ca=%s",
-                record.tx_id, record.status, record.signal.token_address,
-            )
+                record.result = result
+                self._history.append(record)
+                self._on_trade_done(record)
+                return record
+
+            if status == 3 and is_buy and attempt < max_attempts:
+                # 链上失败，重试
+                logger.warning("🔄 链上执行失败，%d秒后重试 ca=%s attempt=%d/%d",
+                               self.BUY_RETRY_DELAY, signal.token_address, attempt, max_attempts)
+                await asyncio.sleep(self.BUY_RETRY_DELAY)
+                continue
+
+            # 最终失败或卖出失败
+            record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
+            if is_buy:
+                record.score = analysis.score
+                record.tier = self._get_tier_name(analysis.score)
+            record.status = "failed" if status == 3 else "unknown"
+            record.result = result if isinstance(result, dict) else {}
+            self._history.append(record)
+            self._on_trade_done(record)
+            return record
+
+        return None
+
+    # ── 重试参数 ──────────────────────────────────────────────
+    BUY_RETRY_MAX = 2       # 买入最多尝试 2 次（1次原始 + 1次重试）
+    BUY_RETRY_DELAY = 3     # 重试间隔 3 秒
+
+    async def _wait_trade_result(self, tx_id: str) -> dict:
+        """轮询链上交易结果"""
+        try:
+            result = await client.wait_trade(tx_id)
+            return result if isinstance(result, dict) else {}
         except Exception as e:
-            record.status = "failed"
-            logger.error("轮询交易状态失败 txId=%s error=%s", record.tx_id, e)
+            logger.error("轮询交易状态失败 txId=%s error=%s", tx_id, e)
+            return {}
+
+    def _on_trade_done(self, record: TradeRecord) -> None:
+        """交易完成后的统一回调（安全统计 + 仓位登记）"""
+        logger.info("交易完成 txId=%s status=%s ca=%s",
+                     record.tx_id, record.status, record.signal.token_address)
 
         # 安全统计
         if record.signal.action == "buy":
@@ -208,13 +242,10 @@ class TradingEngine:
         # 买入成功后登记仓位，启动止盈监控，写入信号汇总
         if record.status == "success" and record.signal.action == "buy":
             self._log_trade_signal(record)
-            await self._register_position(record)
+            asyncio.create_task(self._register_position(record))
 
         if self.on_result:
-            if asyncio.iscoroutinefunction(self.on_result):
-                await self.on_result(record)
-            else:
-                self.on_result(record)
+            self.on_result(record)
 
     async def _register_position(self, record: TradeRecord) -> None:
         """买入成功后查询入场价格，登记仓位"""
