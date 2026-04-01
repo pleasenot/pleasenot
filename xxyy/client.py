@@ -298,7 +298,12 @@ class XxyyClient:
         }
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
-        # swap 用独立客户端，不走全局节流队列（避免被查询请求堵塞导致 8054）
+        # swap 用独立客户端，但加最小间隔防 429
+        now = time.monotonic()
+        swap_wait = 1.5 - (now - getattr(self, '_last_swap', 0))
+        if swap_wait > 0:
+            await asyncio.sleep(swap_wait)
+        self._last_swap = time.monotonic()
         try:
             resp = await self._swap_client.post(f"{PREFIX}/swap", json=body)
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:

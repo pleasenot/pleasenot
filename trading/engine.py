@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+import httpx
 from xxyy.client import client, XxyyAPIError
 from signals.base import TradeSignal
 from trading.position_monitor import PositionMonitor, Position
@@ -252,15 +253,17 @@ class TradingEngine:
                         amount=amount,
                         tip=self.tip,
                     )
-            except XxyyAPIError as e:
+            except (XxyyAPIError, httpx.HTTPStatusError) as e:
                 logger.error("swap 失败 ca=%s attempt=%d/%d error=%s",
                              signal.token_address, attempt, max_attempts, e)
                 if is_buy and attempt < max_attempts:
                     logger.info("⏳ %d秒后重试 ca=%s", self.BUY_RETRY_DELAY, signal.token_address)
                     await asyncio.sleep(self.BUY_RETRY_DELAY)
                     continue
-                # 8054 = 代币不可交易，不计入连续失败冷却
-                if is_buy and e.code != 8054:
+                # 8054 和 429 不计入连续失败冷却
+                is_transient = (isinstance(e, httpx.HTTPStatusError) or
+                               (isinstance(e, XxyyAPIError) and e.code == 8054))
+                if is_buy and not is_transient:
                     self.safety.record_failure()
                 return None
 
