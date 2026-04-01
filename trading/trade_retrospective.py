@@ -564,14 +564,14 @@ class TradeRetrospective:
 - 信号源单一是大问题，需要多元化
 - 高分交易也亏损说明评分系统有误差，需要校准
 
-请输出 JSON 格式：
+请输出 JSON 格式（每个字段控制在100字以内，param_changes最多5条）：
 {
-  "diagnosis": "200字以内的问题诊断",
+  "diagnosis": "100字以内的核心问题",
   "param_changes": [
-    {"param": "参数名", "current": "当前值", "suggested": "建议值", "reason": "理由"}
+    {"param": "参数名", "current": "当前值", "suggested": "建议值", "reason": "20字理由"}
   ],
-  "strategy_advice": "200字以内的整体策略建议",
-  "risk_level": "low/medium/high — 当前策略的风险等级",
+  "strategy_advice": "100字以内的整体建议",
+  "risk_level": "low/medium/high",
   "confidence": 0-100
 }
 
@@ -592,7 +592,7 @@ class TradeRetrospective:
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": data_summary + params},
                         ],
-                        "max_completion_tokens": 1000,
+                        "max_completion_tokens": 2000,
                         "temperature": 0.3,
                     },
                 )
@@ -608,8 +608,13 @@ class TradeRetrospective:
                 .get("content", "")
             )
 
-            # 解析 AI 回复
-            ai_result = json.loads(content.strip())
+            # 解析 AI 回复（兼容 ```json 代码块包裹）
+            raw = content.strip()
+            if raw.startswith("```"):
+                # 去掉 ```json 和 ```
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```\s*$", "", raw)
+            ai_result = json.loads(raw)
 
             # 格式化输出
             lines = [
