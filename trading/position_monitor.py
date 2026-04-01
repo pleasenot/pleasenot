@@ -217,13 +217,33 @@ class PositionMonitor:
             logger.debug("PNL查询失败 ca=%s: %s", pos.token_address[:12], e)
         return None
 
+    async def _get_dexscreener_price(self, token_address: str) -> float:
+        """从 DexScreener 获取实时价格（比 XXYY query_token 更准）"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
+                resp = await http.get(
+                    f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+                )
+                if resp.status_code == 200:
+                    pairs = resp.json().get("pairs") or []
+                    if pairs:
+                        return float(pairs[0].get("priceUsd", 0) or 0)
+        except Exception:
+            pass
+        return 0.0
+
     async def _check_position(self, pos: Position) -> None:
+        # 优先用 DexScreener 价格（更准），失败回退到 XXYY query_token
+        current_price = await self._get_dexscreener_price(pos.token_address)
+
         data = await client.query_token(pos.token_address, pos.chain)
         if not isinstance(data, dict):
-            return
-
+            data = {}
         trade_info = data.get("tradeInfo") or {}
-        current_price = float(trade_info.get("price", 0) or 0)
+
+        if current_price <= 0:
+            current_price = float(trade_info.get("price", 0) or 0)
         if current_price <= 0:
             return
 
