@@ -58,6 +58,8 @@ class KolBuyScanner(BaseSignalSource):
                     mc = float(token.get("marketCap", 0) or 0)
                     if mc < self.min_market_cap:
                         continue
+                    if mc > 500_000:
+                        continue
 
                     self._seen.add(ca)
 

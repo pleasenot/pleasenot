@@ -178,6 +178,9 @@ class DexScreenerScanner(BaseSignalSource):
         # 太小的跳过
         if liq < 1000 or mc < 2000:
             return None
+        # 打新策略：太大的不碰
+        if mc > 500_000:
+            return None
         # 要有一定活跃度
         if vol_24h < 500:
             return None
