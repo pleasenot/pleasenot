@@ -14,12 +14,12 @@ from utils.logger import get_logger
 logger = get_logger("safety")
 
 # ── 安全参数 ─────────────────────────────────────────────
-MAX_DAILY_LOSS_SOL = 1.0          # 单日最大亏损 1 SOL，超过暂停买入
-MAX_CONCURRENT_POSITIONS = 5       # 最多同时持仓 5 个
-MAX_CONSECUTIVE_FAILURES = 3       # 连续 3 笔失败后冷却
-FAILURE_COOLDOWN_SECONDS = 300     # 失败冷却 5 分钟
-MIN_SOL_BALANCE = 0.5             # 余额低于 0.5 SOL 停止买入
-MAX_SINGLE_BUY_SOL = 0.3          # 单笔最大投入 0.3 SOL
+MAX_DAILY_LOSS_SOL = 1.5          # 单日最大亏损 1.5 SOL（样本多了损耗会增加）
+MAX_CONCURRENT_POSITIONS = 20      # 最多同时持仓 20 个（广撒网核心）
+MAX_CONSECUTIVE_FAILURES = 5       # 连续 5 笔失败后冷却（样本多，容忍度提高）
+FAILURE_COOLDOWN_SECONDS = 120     # 失败冷却 2 分钟（快速恢复）
+MIN_SOL_BALANCE = 0.3             # 余额低于 0.3 SOL 停止买入
+MAX_SINGLE_BUY_SOL = 0.1          # 单笔最大投入 0.1 SOL（严控单笔风险）
 
 
 class SafetyGuard:

@@ -43,7 +43,7 @@ class TokenAnalyzer:
     """买入前全面分析，返回评分和建议"""
 
     def __init__(self, min_score: int | None = None):
-        self.min_score = min_score or config.analyzer_min_score
+        self.min_score = min_score or config.analyzer_min_score  # 默认40，通过 .env ANALYZER_MIN_SCORE 配置
 
     async def analyze(self, token_address: str, chain: str) -> AnalysisResult:
         result = AnalysisResult(token_address=token_address, chain=chain)

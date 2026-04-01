@@ -43,26 +43,70 @@ class TradingEngine:
         self.on_result = on_result
         self._history: list[TradeRecord] = []
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
+        self._signal_queue: asyncio.Queue = asyncio.Queue()
+        self._processing: set[str] = set()  # 正在处理的 CA，防止并发分析同一个币
+        self._rejected_cache: set[str] = set()  # 已拒绝的 CA 缓存，避免重复分析
         self.position_monitor = PositionMonitor()
         self.analyzer = TokenAnalyzer()
         self.safety = SafetyGuard()
         self.position_monitor.set_safety(self.safety)
         self.reporter = None  # 由 main.py 注入
+        # 启动信号消费者
+        self._consumer_task = None
+
+    def start_consumer(self):
+        """启动信号队列消费者（在 main.py 的 run() 中调用）"""
+        self._consumer_task = asyncio.create_task(self._consume_signals())
+
+    async def _consume_signals(self):
+        """串行消费信号队列，避免 XXYY API 429"""
+        while True:
+            signal = await self._signal_queue.get()
+            try:
+                await self._process_signal(signal)
+            except Exception as e:
+                logger.error("信号处理异常 ca=%s: %s", signal.token_address, e)
+            finally:
+                self._processing.discard(signal.token_address)
+                self._signal_queue.task_done()
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
-        """收到信号后执行交易，返回交易记录"""
+        """收到信号后放入队列（非阻塞），由消费者串行处理"""
         if not self.wallet_address:
             logger.error("未配置 WALLET_ADDRESS，跳过信号 ca=%s", signal.token_address)
             return None
+
+        is_buy = signal.action == "buy"
+
+        # 快速去重（不需要等队列）
+        if is_buy:
+            ca = signal.token_address
+            # 已在处理中
+            if ca in self._processing:
+                return None
+            # 已被拒绝过
+            if ca in self._rejected_cache:
+                return None
+            # 已持仓
+            held = {p.token_address for p in self.position_monitor.positions if p.status != "closed"}
+            if ca in held:
+                return None
+            self._processing.add(ca)
 
         logger.info(
             "信号触发 action=%s ca=%s chain=%s source=%s",
             signal.action, signal.token_address, signal.chain, signal.source,
         )
 
+        # 放入队列串行处理
+        await self._signal_queue.put(signal)
+        return None
+
+    async def _process_signal(self, signal: TradeSignal) -> TradeRecord | None:
+        """实际处理信号（由消费者串行调用）"""
         is_buy = signal.action == "buy"
 
-        # 去重：已持仓的不再买入
+        # 再次检查持仓（可能队列等待期间已买入）
         if is_buy:
             held = {p.token_address for p in self.position_monitor.positions if p.status != "closed"}
             if signal.token_address in held:
@@ -75,6 +119,7 @@ class TradingEngine:
             logger.info("分析结果:\n%s", analysis.summary())
             if not analysis.passed:
                 logger.info("分析未通过，跳过买入 ca=%s score=%d", signal.token_address, analysis.score)
+                self._rejected_cache.add(signal.token_address)
                 if self.reporter:
                     self.reporter.record_signal(signal.source, passed=False, score=analysis.score)
                 return None
@@ -189,13 +234,15 @@ class TradingEngine:
         except Exception as e:
             logger.error("仓位登记失败 ca=%s error=%s", record.signal.token_address, e)
 
-    # ── 分档投入 ─────────────────────────────────────────────
-    # 顶级(≥90): 3x | 人上人(≥75): 2x | NPC(≥50): 1x | 拉跨(<50): 不买
+    # ── 分档投入（广撒网策略）─────────────────────────────────
+    # 小注为主，顶级才加码，拉跨也敢少量试
+    # 顶级(≥90): 2x | 人上人(≥75): 1.5x | NPC(≥50): 1x | 探路(≥40): 0.5x
 
     TIERS = [
-        (90, 3.0, "顶级"),
-        (75, 2.0, "人上人"),
+        (90, 2.0, "顶级"),
+        (75, 1.5, "人上人"),
         (50, 1.0, "NPC"),
+        (40, 0.5, "探路"),
     ]
 
     def _calc_buy_amount(self, score: int) -> float:

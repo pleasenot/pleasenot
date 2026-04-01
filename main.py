@@ -43,6 +43,7 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         logger.info("[DRY-RUN] 跳过 API 连通性检查")
 
     engine = TradingEngine(on_result=on_trade_result)
+    engine.start_consumer()  # 启动信号队列消费者（串行处理，避免 429）
 
     # 策略报告（测试时60秒出一份，正式运行可改为300秒）
     reporter = StrategyReporter(engine, interval=60)
