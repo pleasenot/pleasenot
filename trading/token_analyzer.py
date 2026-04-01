@@ -68,6 +68,7 @@ class TokenAnalyzer:
         pair_info = data.get("pairInfo") or {}
         link_info = data.get("linkInfo") or {}
         dev_info = data.get("dev") or {}
+        tax_info = data.get("taxInfo") or {}
 
         # ── 0. 硬性门槛（不达标直接否决，节省 API 调用）─────
         holders = int(trade_info.get("holder", 0) or 0)
@@ -86,6 +87,9 @@ class TokenAnalyzer:
 
         # ── 1. 安全性检查（一票否决 + 加分）──────────────
         self._check_security(security_info, trade_info, result)
+
+        # ── 1b. 税率检查 ────────────────────────────────
+        self._check_tax(tax_info, result)
 
         # ── 2. 筹码分布 ─────────────────────────────────
         self._check_holders(trade_info, dev_info, data, result)
@@ -130,12 +134,21 @@ class TokenAnalyzer:
 
     def _check_security(self, security_info: dict, trade_info: dict, result: AnalysisResult) -> None:
         """
-        securityInfo 实际字段: locked, noMint, noFreeze
+        securityInfo 实际字段: locked, noMint, noFreeze, honeyPot, openSource, noOwner
+        taxInfo 字段: buy, sell（买卖税率）
         """
+        # 蜜罐检测（一票否决）— 买得进卖不出
+        honey_pot = security_info.get("honeyPot")
+        if honey_pot is True:
+            result.fatal.append("蜜罐代币(honeyPot)，无法卖出")
+            return
+
         # noMint + noFreeze = 相当于 renounced（无法增发、无法冻结）
         no_mint = security_info.get("noMint", False)
         no_freeze = security_info.get("noFreeze", False)
         locked = security_info.get("locked", False)
+        open_source = security_info.get("openSource", False)
+        no_owner = security_info.get("noOwner", False)
 
         # PumpFun 上几乎所有币都 noMint+noFreeze+locked，降低白送分
         if no_mint and no_freeze:
@@ -143,13 +156,33 @@ class TokenAnalyzer:
             result.reasons.append("+2 合约安全(noMint+noFreeze)")
         elif no_mint or no_freeze:
             result.score += 1
-            result.reasons.append(f"+1 合约部分安全")
+            result.reasons.append("+1 合约部分安全")
         else:
             result.fatal.append("合约未放弃权限，有 rug 风险")
 
         if locked:
             result.score += 1
             result.reasons.append("+1 流动性已锁定")
+
+        # 开源合约 + 无 owner = 更安全
+        if open_source and no_owner:
+            result.score += 2
+            result.reasons.append("+2 合约开源且无owner")
+
+    # ── 税率检查 ──────────────────────────────────────────────
+
+    def _check_tax(self, tax_info: dict, result: AnalysisResult) -> None:
+        """taxInfo: buy(买入税率%), sell(卖出税率%)"""
+        buy_tax = float(tax_info.get("buy", 0) or 0)
+        sell_tax = float(tax_info.get("sell", 0) or 0)
+
+        if buy_tax > 10 or sell_tax > 10:
+            result.fatal.append(f"税率过高(买{buy_tax:.1f}%/卖{sell_tax:.1f}%)，疑似貔貅")
+        elif buy_tax > 5 or sell_tax > 5:
+            result.score -= 5
+            result.reasons.append(f"-5 税率偏高(买{buy_tax:.1f}%/卖{sell_tax:.1f}%)")
+        elif buy_tax > 0 or sell_tax > 0:
+            result.reasons.append(f"+0 有税率(买{buy_tax:.1f}%/卖{sell_tax:.1f}%)")
 
     # ── 筹码分布 ────────────────────────────────────────────
 

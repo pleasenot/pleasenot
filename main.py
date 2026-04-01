@@ -11,7 +11,7 @@ import argparse
 
 from config import config
 from xxyy.client import client
-from signals.feed_scanner import FeedScanner
+from signals.feed_scanner import FeedScanner, SMART_FILTERS, DEXPAID_FILTERS
 from signals.ai_trending_scanner import AiTrendingScanner
 from signals.twitter_scanner import TwitterScanner
 from signals.social_trend_scanner import SocialTrendScanner
@@ -70,6 +70,20 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         ai_only=False, interval=30, max_signals_per_cycle=3,
     )
     tasks.append(asyncio.create_task(feed.start(handle)))
+
+    # Feed 扫描（有 KOL 买入的新币，条件更宽松，每轮最多 2 个）
+    feed_kol = FeedScanner(
+        chain=config.default_chain, feed_type="NEW",
+        filters=SMART_FILTERS, ai_only=False, interval=45, max_signals_per_cycle=2,
+    )
+    tasks.append(asyncio.create_task(feed_kol.start(handle)))
+
+    # Feed 扫描（DexScreener 付费推广的币，有运营意愿）
+    feed_dexpaid = FeedScanner(
+        chain=config.default_chain, feed_type="COMPLETED",
+        filters=DEXPAID_FILTERS, ai_only=False, interval=60, max_signals_per_cycle=2,
+    )
+    tasks.append(asyncio.create_task(feed_dexpaid.start(handle)))
 
     # AI 热点信号源（提高每轮信号数）
     ai_trending = AiTrendingScanner(chain=config.default_chain, max_signals_per_cycle=2)

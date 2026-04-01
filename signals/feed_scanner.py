@@ -16,6 +16,26 @@ DEFAULT_FILTERS = {
     "mc": "2000,",          # 最低市值 2000 USD（从 5000 降到 2000）
     "insiderHp": ",20",     # 内部人持仓 < 20%（稍微放宽）
     "snipers": ",10",       # 狙击者数量 < 10
+    "bundleHp": ",30",      # Bundle 持仓 < 30%（防批量操控）
+    "newWalletHp": ",30",   # 新钱包持仓 < 30%（防 sybil 攻击）
+}
+
+# 高质量过滤条件（有 KOL 或聪明钱买入的币，条件可以放宽）
+SMART_FILTERS = {
+    "holder": "3,",
+    "mc": "1000,",
+    "kol": "1,",            # 至少 1 个 KOL 买入
+    "insiderHp": ",25",
+    "snipers": ",15",
+}
+
+# DexScreener 付费推广过滤（付费推广的币至少有运营意愿）
+DEXPAID_FILTERS = {
+    "holder": "5,",
+    "mc": "2000,",
+    "dexPay": 1,            # 仅 DexScreener 付费推广的币
+    "insiderHp": ",20",
+    "snipers": ",10",
 }
 
 

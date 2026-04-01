@@ -258,8 +258,15 @@ class XxyyClient:
         is_buy: bool,
         amount: float,
         tip: float | None = None,
+        slippage: int = 20,
+        model: int = 1,
     ) -> str:
-        """发起买入或卖出，返回 txId。卖出时 amount 为百分比(1-100)。"""
+        """
+        发起买入或卖出，返回 txId。
+        卖出时 amount 为百分比(1-100)。
+        model: 1=防夹子模式(默认), 2=快速模式
+        slippage: 滑点容差百分比(0-100, 默认20)
+        """
         body = {
             "chain": chain,
             "walletAddress": wallet_address,
@@ -267,6 +274,8 @@ class XxyyClient:
             "isBuy": is_buy,
             "amount": amount,
             "tip": tip if tip is not None else config.tip,
+            "model": model,
+            "slippage": slippage,
         }
         result = await self._post("/swap", body)
         if isinstance(result, dict):
