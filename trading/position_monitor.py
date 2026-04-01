@@ -93,6 +93,8 @@ class Position:
     volume_recorded: bool = False
     # 时间追踪
     entry_time: float = field(default_factory=time.time)
+    # 实际买入金额（用于准确计算亏损）
+    buy_amount: float = 0.0
     # 卖出记录
     sell_log: list[str] = field(default_factory=list)
     # AI 分析
@@ -554,7 +556,8 @@ class PositionMonitor:
                                     logger.info("PNL真实亏损 ca=%s pnl=%.4f SOL", pos.token_address[:12], real_loss)
                         except Exception:
                             pass
-                        loss = real_loss if real_loss is not None else config.buy_amount * (1.0 - multiplier) * (sell_percent / 100.0)
+                            actual_buy = pos.buy_amount if pos.buy_amount > 0 else config.buy_amount
+                        loss = real_loss if real_loss is not None else actual_buy * (1.0 - multiplier) * (sell_percent / 100.0)
                         self._safety.record_loss(loss)
                     else:
                         # 盈利：重置连续亏损计数
@@ -628,6 +631,7 @@ class PositionMonitor:
                 "highest_price": p.highest_price,
                 "trailing_active": p.trailing_active,
                 "entry_time": p.entry_time,
+                "buy_amount": p.buy_amount,
             })
         # 先写临时文件，成功后再原子替换，避免写一半崩溃导致 JSON 损坏
         tmp_file = self.SAVE_FILE + ".tmp"
@@ -669,6 +673,7 @@ class PositionMonitor:
                     highest_price=d.get("highest_price", 0.0),
                     trailing_active=d.get("trailing_active", False),
                     entry_time=saved_entry_time,
+                    buy_amount=d.get("buy_amount", 0.0),
                 )
                 self._positions.append(pos)
                 count += 1

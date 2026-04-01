@@ -103,7 +103,7 @@ class TradingEngine:
                 self._signal_queue.task_done()
 
     def _cleanup_dedup(self) -> None:
-        """清理过期的去重缓存和信号强度追踪"""
+        """清理过期的去重缓存、信号强度追踪、拒绝缓存、历史记录"""
         now = time.time()
         expired = [ca for ca, ts in self._signal_seen.items() if now - ts > DEDUP_TTL]
         for ca in expired:
@@ -112,6 +112,15 @@ class TradingEngine:
         expired_hits = [ca for ca, h in self._signal_hits.items() if now - h["first_seen"] > SIGNAL_STRENGTH_WINDOW * 2]
         for ca in expired_hits:
             del self._signal_hits[ca]
+        # 拒绝缓存：超过 1000 个时清掉一半（LRU 近似）
+        if len(self._rejected_cache) > 1000:
+            # set 无序，随机删一半
+            to_remove = list(self._rejected_cache)[:500]
+            for ca in to_remove:
+                self._rejected_cache.discard(ca)
+        # 历史记录：只保留最近 500 条
+        if len(self._history) > 500:
+            self._history = self._history[-500:]
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后放入队列（非阻塞），由消费者并发处理"""
@@ -165,8 +174,8 @@ class TradingEngine:
         # 放入队列
         await self._signal_queue.put(signal)
 
-        # 定期清理去重缓存
-        if len(self._signal_seen) > 500:
+        # 定期清理各类缓存
+        if len(self._signal_seen) > 200 or len(self._rejected_cache) > 500:
             self._cleanup_dedup()
 
         return None
@@ -346,6 +355,7 @@ class TradingEngine:
                     wallet_address=self.wallet_address,
                     entry_price=entry_price,
                     tip=self.tip,
+                    buy_amount=record.buy_amount,
                 )
                 self.position_monitor.add(pos)
                 return
@@ -368,6 +378,7 @@ class TradingEngine:
                         wallet_address=self.wallet_address,
                         entry_price=-1.0,
                         tip=self.tip,
+                        buy_amount=record.buy_amount,
                     )
                     self.position_monitor.add(pos)
 
@@ -403,8 +414,9 @@ class TradingEngine:
 
         amount = base * tier_multi * signal_multi
 
-        # 最终下限保护（上限由 safety.py 的 MAX_SINGLE_BUY_SOL 兜底）
-        amount = max(POSITION_MIN_SOL, amount)
+        # clamp 到安全范围（不能让 safety 拒绝好交易，应该截断到上限）
+        from trading.safety import MAX_SINGLE_BUY_SOL
+        amount = max(POSITION_MIN_SOL, min(MAX_SINGLE_BUY_SOL, amount))
 
         logger.info(
             "动态仓位: balance=%.3f base=%.4f × tier=%.1f(score=%d) × signal=%.1f(%d源) → %.4f SOL",
