@@ -6,3 +6,4 @@ __pycache__/
 bot.log
 positions.json
 trade_signals.log
+bot_daemon.log
