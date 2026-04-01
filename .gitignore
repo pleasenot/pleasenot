@@ -13,3 +13,8 @@ api_health.json
 # Release
 *.tar.gz
 *.zip
+
+# Build
+build/
+dist/
+*.spec
