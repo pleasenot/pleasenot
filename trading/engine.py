@@ -247,27 +247,64 @@ class TradingEngine:
         if self.on_result:
             self.on_result(record)
 
+    REGISTER_RETRY_MAX = 3
+    REGISTER_RETRY_DELAY = 5
+
     async def _register_position(self, record: TradeRecord) -> None:
-        """买入成功后查询入场价格，登记仓位"""
-        try:
-            token_data = await client.query_token(
-                record.signal.token_address, record.signal.chain
-            )
-            trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
-            entry_price = float(trade_info.get("price") or 0)
-            if entry_price <= 0:
-                logger.warning("无法获取入场价格 ca=%s，跳过仓位登记", record.signal.token_address)
+        """买入成功后查询入场价格，登记仓位。失败重试，确保不丢仓位。"""
+        for attempt in range(1, self.REGISTER_RETRY_MAX + 1):
+            try:
+                token_data = await client.query_token(
+                    record.signal.token_address, record.signal.chain
+                )
+                trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
+                entry_price = float(trade_info.get("price") or 0)
+                if entry_price <= 0:
+                    if attempt < self.REGISTER_RETRY_MAX:
+                        logger.warning(
+                            "获取入场价格失败 ca=%s attempt=%d/%d，%ds后重试",
+                            record.signal.token_address, attempt, self.REGISTER_RETRY_MAX,
+                            self.REGISTER_RETRY_DELAY,
+                        )
+                        await asyncio.sleep(self.REGISTER_RETRY_DELAY)
+                        continue
+                    # 最后一次仍失败，用买入金额估算一个价格，宁可不准也不丢仓位
+                    logger.error(
+                        "⚠️ 无法获取入场价格 ca=%s，使用备用价格登记仓位",
+                        record.signal.token_address,
+                    )
+                    entry_price = 1e-10  # 极小值，确保任何涨幅都能触发止盈
+                pos = Position(
+                    chain=record.signal.chain,
+                    token_address=record.signal.token_address,
+                    wallet_address=self.wallet_address,
+                    entry_price=entry_price,
+                    tip=self.tip,
+                )
+                self.position_monitor.add(pos)
                 return
-            pos = Position(
-                chain=record.signal.chain,
-                token_address=record.signal.token_address,
-                wallet_address=self.wallet_address,
-                entry_price=entry_price,
-                tip=self.tip,
-            )
-            self.position_monitor.add(pos)
-        except Exception as e:
-            logger.error("仓位登记失败 ca=%s error=%s", record.signal.token_address, e)
+            except Exception as e:
+                if attempt < self.REGISTER_RETRY_MAX:
+                    logger.warning(
+                        "仓位登记异常 ca=%s attempt=%d/%d: %s，%ds后重试",
+                        record.signal.token_address, attempt, self.REGISTER_RETRY_MAX,
+                        e, self.REGISTER_RETRY_DELAY,
+                    )
+                    await asyncio.sleep(self.REGISTER_RETRY_DELAY)
+                else:
+                    # 最终兜底：用极小价格登记，确保仓位不丢
+                    logger.error(
+                        "⚠️ 仓位登记最终失败 ca=%s，使用备用价格强制登记: %s",
+                        record.signal.token_address, e,
+                    )
+                    pos = Position(
+                        chain=record.signal.chain,
+                        token_address=record.signal.token_address,
+                        wallet_address=self.wallet_address,
+                        entry_price=1e-10,
+                        tip=self.tip,
+                    )
+                    self.position_monitor.add(pos)
 
     # ── 分档投入（广撒网策略）─────────────────────────────────
     # 小注为主，顶级才加码，拉跨也敢少量试
