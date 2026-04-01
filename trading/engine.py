@@ -50,6 +50,7 @@ class TradingEngine:
         self.analyzer = TokenAnalyzer()
         self.safety = SafetyGuard()
         self.position_monitor.set_safety(self.safety)
+        self.position_monitor._on_signal = self.handle_signal  # 墓地复活信号回调
         self.reporter = None  # 由 main.py 注入
         # 启动信号消费者
         self._consumer_task = None
@@ -84,9 +85,12 @@ class TradingEngine:
             # 已在处理中
             if ca in self._processing:
                 return None
-            # 已被拒绝过
+            # 已被拒绝过（墓地复活信号除外，给二次机会）
             if ca in self._rejected_cache:
-                return None
+                if signal.source == "graveyard_revive":
+                    self._rejected_cache.discard(ca)
+                else:
+                    return None
             # 已持仓
             held = {p.token_address for p in self.position_monitor.positions if p.status != "closed"}
             if ca in held:

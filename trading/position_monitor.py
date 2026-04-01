@@ -64,6 +64,13 @@ AI_SELL_CONFIDENCE = 75         # AI 说 SELL 且 confidence >= 75 才执行
 # ── 链上同步 ────────────────────────────────────────────
 ONCHAIN_SYNC_INTERVAL = 120     # 每 2 分钟同步一次链上持仓
 
+# ── 墓地复活扫描 ────────────────────────────────────────
+GRAVEYARD_CHECK_INTERVAL = 600  # 每 10 分钟扫描一次已卖出的币
+GRAVEYARD_REVIVE_MC = 10000     # 市值恢复到 $10k 以上算复活
+GRAVEYARD_REVIVE_VOL = 2000     # 1h 成交量恢复到 $2k 以上
+GRAVEYARD_REVIVE_HOLDERS = 20   # 持仓人恢复到 20 以上
+GRAVEYARD_MAX_AGE = 86400       # 只追踪 24 小时内卖出的币
+
 
 @dataclass
 class Position:
@@ -96,6 +103,10 @@ class PositionMonitor:
         self._swap_lock = asyncio.Semaphore(1)
         self._running = False
         self._safety = None  # 由 engine 注入
+        # 墓地：已卖出的币 {ca: {"sell_time": float, "sell_price": float, "chain": str}}
+        self._graveyard: dict[str, dict] = {}
+        self._last_graveyard_check: float = 0.0
+        self._on_signal = None  # 由 engine 注入，用于复活信号
 
     def set_safety(self, safety) -> None:
         self._safety = safety
@@ -167,6 +178,11 @@ class PositionMonitor:
             if time.time() - self._last_sync_time >= ONCHAIN_SYNC_INTERVAL:
                 await self._sync_onchain_holdings()
                 self._last_sync_time = time.time()
+
+            # 定期扫描墓地（已卖出的币有没有复活）
+            if time.time() - self._last_graveyard_check >= GRAVEYARD_CHECK_INTERVAL:
+                await self._check_graveyard()
+                self._last_graveyard_check = time.time()
 
             await asyncio.sleep(PRICE_CHECK_INTERVAL)
 
@@ -482,6 +498,15 @@ class PositionMonitor:
             # 记录亏损到安全护栏（仅在亏损时）
             if self._safety and "止损" in reason:
                 self._safety.record_loss(0.05)
+            # 卖出 100% 时加入墓地，后续定期回查复活
+            if sell_percent == 100:
+                self._graveyard[pos.token_address] = {
+                    "sell_time": time.time(),
+                    "sell_price": pos.highest_price or pos.entry_price,
+                    "chain": pos.chain,
+                    "reason": reason,
+                }
+                logger.info("🪦 加入墓地监控 ca=%s reason=%s", pos.token_address[:16], reason)
             self.save_positions()
             # 写入交易信号汇总
             self._log_sell_signal(pos, sell_percent, reason, tx_id)
@@ -570,6 +595,70 @@ class PositionMonitor:
             return 0
 
     # ── 链上持仓同步 ─────────────────────────────────────
+
+    async def _check_graveyard(self) -> None:
+        """扫描墓地里的币，如果复活了就触发重新买入信号"""
+        if not self._graveyard:
+            return
+
+        now = time.time()
+        revived = []
+        expired = []
+
+        for ca, info in list(self._graveyard.items()):
+            # 超过 24 小时的不再追踪
+            if now - info["sell_time"] > GRAVEYARD_MAX_AGE:
+                expired.append(ca)
+                continue
+
+            # 已经重新持仓的不查
+            if any(p.token_address == ca and p.status != "closed" for p in self._positions):
+                expired.append(ca)
+                continue
+
+            try:
+                data = await client.query_token(ca, info["chain"])
+                if not isinstance(data, dict):
+                    continue
+
+                ti = data.get("tradeInfo") or {}
+                mc = float(ti.get("marketCapUsd", 0) or 0)
+                vol = float(ti.get("hourTradeVolume", 0) or 0)
+                holders = int(ti.get("holder", 0) or 0)
+
+                if mc >= GRAVEYARD_REVIVE_MC and vol >= GRAVEYARD_REVIVE_VOL and holders >= GRAVEYARD_REVIVE_HOLDERS:
+                    symbol = data.get("baseSymbol") or "?"
+                    logger.info(
+                        "🧟 墓地复活！ %s ca=%s mc=$%.0f vol=$%.0f holders=%d (卖出原因: %s)",
+                        symbol, ca[:16], mc, vol, holders, info.get("reason", "?"),
+                    )
+                    revived.append(ca)
+
+                    # 触发买入信号
+                    if self._on_signal:
+                        from signals.base import TradeSignal
+                        signal = TradeSignal(
+                            chain=info["chain"],
+                            token_address=ca,
+                            action="buy",
+                            source="graveyard_revive",
+                            reason=f"墓地复活 {symbol} mc=${mc:.0f} vol=${vol:.0f} holders={holders}",
+                        )
+                        if asyncio.iscoroutinefunction(self._on_signal):
+                            await self._on_signal(signal)
+                        else:
+                            self._on_signal(signal)
+            except Exception as e:
+                logger.debug("graveyard check ca=%s error: %s", ca[:12], e)
+
+            await asyncio.sleep(3)  # 避免 429
+
+        # 清理
+        for ca in expired + revived:
+            self._graveyard.pop(ca, None)
+
+        if expired:
+            logger.debug("墓地清理 %d 个过期条目", len(expired))
 
     async def _sync_onchain_holdings(self) -> None:
         """

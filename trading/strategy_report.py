@@ -79,6 +79,25 @@ class StrategyReporter:
         lines.append(f"  买入成功: {len(success)}  |  买入失败: {len(failed)}  |  成功率: {len(success)/max(len(buys),1):.0%}")
         lines.append(f"  总投入: {total_invested:.3f} SOL")
 
+        # ── 1.5 盈亏统计 ────────────────────────────────
+        pnl_data = await self._calc_pnl(positions)
+        lines.append("")
+        lines.append("【盈亏统计】")
+        lines.append(f"  当前持仓价值: ${pnl_data['holding_value']:.2f}")
+        lines.append(f"  总投入成本:   ${pnl_data['total_cost']:.2f}")
+        lines.append(f"  已实现盈亏:   ${pnl_data['realized_pnl']:+.2f}")
+        lines.append(f"  未实现盈亏:   ${pnl_data['unrealized_pnl']:+.2f}")
+        total_pnl = pnl_data['realized_pnl'] + pnl_data['unrealized_pnl']
+        pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
+        roi = total_pnl / max(pnl_data['total_cost'], 0.01) * 100
+        lines.append(f"  {pnl_emoji} 总盈亏: ${total_pnl:+.2f} (ROI: {roi:+.1f}%)")
+        # 胜率
+        wins = pnl_data['win_count']
+        losses = pnl_data['loss_count']
+        total_trades = wins + losses
+        if total_trades > 0:
+            lines.append(f"  胜率: {wins}/{total_trades} ({wins/total_trades:.0%})  |  盈亏比: {pnl_data['avg_win']:.2f}:{pnl_data['avg_loss']:.2f}")
+
         # ── 2. 持仓状态 ──────────────────────────────────
         lines.append("")
         lines.append("【当前持仓】")
@@ -123,7 +142,7 @@ class StrategyReporter:
             tier_counts[tier] += 1
             tier_amounts[tier] += r.buy_amount
 
-        for tier_name in ["顶级", "人上人", "NPC"]:
+        for tier_name in ["顶级", "人上人", "NPC", "探路"]:
             cnt = tier_counts.get(tier_name, 0)
             amt = tier_amounts.get(tier_name, 0)
             lines.append(f"  {tier_name}: {cnt} 笔, 投入 {amt:.3f} SOL")
@@ -336,6 +355,67 @@ class StrategyReporter:
                 lines.append("  无代币持仓")
         except Exception as e:
             lines.append(f"  查询失败: {e}")
+
+    async def _calc_pnl(self, positions: list) -> dict:
+        """计算总盈亏：已实现 + 未实现"""
+        result = {
+            'holding_value': 0.0,
+            'total_cost': 0.0,
+            'realized_pnl': 0.0,
+            'unrealized_pnl': 0.0,
+            'win_count': 0,
+            'loss_count': 0,
+            'avg_win': 0.0,
+            'avg_loss': 0.0,
+        }
+
+        wins = []
+        losses = []
+
+        for pos in positions:
+            # 估算成本（entry_price * 假设数量，用 buy_amount / entry_price 估算）
+            # 由于没记录精确数量，用比例计算盈亏
+            current_price = await self._get_current_price(pos) if pos.status != "closed" else 0
+            entry = pos.entry_price
+
+            if entry <= 0:
+                continue
+
+            if pos.status == "closed":
+                # 已平仓 — 用 sell_log 里的信息估算
+                # 简化：用 highest_price 和 entry 的关系估算
+                if pos.highest_price > 0:
+                    pnl_ratio = (pos.highest_price / entry - 1)
+                else:
+                    pnl_ratio = -0.5  # 默认假设亏50%（止损）
+                # 假设每笔买入 0.03 SOL（当前配置），换算美元
+                cost_usd = config.buy_amount * 170  # 粗估 SOL 价格
+                pnl_usd = cost_usd * pnl_ratio
+                result['realized_pnl'] += pnl_usd
+                result['total_cost'] += cost_usd
+                if pnl_ratio >= 0:
+                    wins.append(pnl_ratio)
+                else:
+                    losses.append(abs(pnl_ratio))
+            else:
+                # 未平仓 — 用当前价格算浮盈浮亏
+                if current_price > 0:
+                    pnl_ratio = (current_price / entry - 1)
+                    cost_usd = config.buy_amount * 170
+                    result['unrealized_pnl'] += cost_usd * pnl_ratio
+                    result['holding_value'] += cost_usd * (1 + pnl_ratio)
+                    result['total_cost'] += cost_usd
+                    if pnl_ratio >= 0:
+                        wins.append(pnl_ratio)
+                    else:
+                        losses.append(abs(pnl_ratio))
+
+        result['win_count'] = len(wins)
+        result['loss_count'] = len(losses)
+        result['avg_win'] = sum(wins) / len(wins) * 100 if wins else 0
+        result['avg_loss'] = sum(losses) / len(losses) * 100 if losses else 0
+
+        return result
 
     async def _get_current_price(self, pos) -> float:
         """获取当前价格"""
