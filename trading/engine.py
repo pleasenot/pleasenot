@@ -313,14 +313,40 @@ class TradingEngine:
     REGISTER_RETRY_DELAY = 5
 
     async def _register_position(self, record: TradeRecord) -> None:
-        """买入成功后查询入场价格，登记仓位。失败重试，确保不丢仓位。"""
+        """买入成功后计算 SOL 计价入场价，登记仓位。"""
         for attempt in range(1, self.REGISTER_RETRY_MAX + 1):
             try:
-                token_data = await client.query_token(
-                    record.signal.token_address, record.signal.chain
-                )
-                trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
-                entry_price = float(trade_info.get("price") or 0)
+                # 优先从交易结果算入场价（SOL计价）：买入SOL / 获得代币数
+                entry_price = 0.0
+                base_amount = float(record.result.get("baseAmount", 0) or 0)  # SOL 花费
+                quote_amount = float(record.result.get("quoteAmount", 0) or 0)  # 代币数量
+                if base_amount > 0 and quote_amount > 0:
+                    entry_price = base_amount / quote_amount  # SOL/token
+                    logger.info("入场价(SOL计): %.12f SOL/token (花费%.4f SOL 获得%.0f个)",
+                                entry_price, base_amount, quote_amount)
+
+                # fallback: 用 DexScreener SOL 计价
+                if entry_price <= 0:
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
+                            resp = await http.get(
+                                f"https://api.dexscreener.com/latest/dex/tokens/{record.signal.token_address}"
+                            )
+                            if resp.status_code == 200:
+                                pairs = resp.json().get("pairs") or []
+                                if pairs:
+                                    entry_price = float(pairs[0].get("priceNative", 0) or 0)
+                    except Exception:
+                        pass
+
+                # fallback: XXYY query_token
+                if entry_price <= 0:
+                    token_data = await client.query_token(
+                        record.signal.token_address, record.signal.chain
+                    )
+                    trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
+                    entry_price = float(trade_info.get("price") or 0)
                 if entry_price <= 0:
                     if attempt < self.REGISTER_RETRY_MAX:
                         logger.warning(

@@ -217,8 +217,8 @@ class PositionMonitor:
             logger.debug("PNL查询失败 ca=%s: %s", pos.token_address[:12], e)
         return None
 
-    async def _get_dexscreener_price(self, token_address: str) -> float:
-        """从 DexScreener 获取实时价格（比 XXYY query_token 更准）"""
+    async def _get_dexscreener_price_sol(self, token_address: str) -> float:
+        """从 DexScreener 获取 SOL 计价的实时价格（meme 币用 SOL 计价才准）"""
         try:
             import httpx
             async with httpx.AsyncClient(timeout=8.0, verify=False) as http:
@@ -228,14 +228,21 @@ class PositionMonitor:
                 if resp.status_code == 200:
                     pairs = resp.json().get("pairs") or []
                     if pairs:
-                        return float(pairs[0].get("priceUsd", 0) or 0)
+                        # 优先用 SOL 计价（priceNative），和 XXYY P&L 一致
+                        native = float(pairs[0].get("priceNative", 0) or 0)
+                        if native > 0:
+                            return native
+                        # fallback: 用 USD 价格 / SOL 价格 算出 SOL 计价
+                        usd = float(pairs[0].get("priceUsd", 0) or 0)
+                        if usd > 0:
+                            return usd  # 退化为 USD（不理想但总比没有好）
         except Exception:
             pass
         return 0.0
 
     async def _check_position(self, pos: Position) -> None:
-        # 优先用 DexScreener 价格（更准），失败回退到 XXYY query_token
-        current_price = await self._get_dexscreener_price(pos.token_address)
+        # 用 DexScreener SOL 计价价格（和 XXYY P&L 一致）
+        current_price = await self._get_dexscreener_price_sol(pos.token_address)
 
         data = await client.query_token(pos.token_address, pos.chain)
         if not isinstance(data, dict):
@@ -247,12 +254,12 @@ class PositionMonitor:
         if current_price <= 0:
             return
 
-        # 待定价格补偿：entry_price < 0 说明买入时没查到价格，用第一次查到的价格补上
+        # 待定价格补偿
         if pos.entry_price < 0:
             pos.entry_price = current_price
-            logger.info("🔧 补偿入场价格 ca=%s entry=$%.8f", pos.token_address, current_price)
+            logger.info("🔧 补偿入场价格 ca=%s entry=%.10f", pos.token_address, current_price)
             self.save_positions()
-            return  # 本轮不做止盈判断，下一轮开始正常监控
+            return
 
         multiplier = current_price / pos.entry_price
 
