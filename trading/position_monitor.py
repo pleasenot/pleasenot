@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 from xxyy.client import client, XxyyAPIError
+from llm.minimax_client import minimax
 from config import config
 from utils.logger import get_logger
 
@@ -50,6 +51,15 @@ HOLDER_DROP_THRESHOLD = 0.9     # 持仓人数降至首次记录的90%以下
 CRASH_STOP_MULTIPLIER = 0.5     # 跌破入场价50%
 CRASH_STOP_SELL_PERCENT = 100
 
+# ── 死币自动清理 ─────────────────────────────────────────
+DEAD_COIN_MC = 3000             # 市值低于 $3k
+DEAD_COIN_HOLDERS = 5           # 持仓人低于 5
+DEAD_COIN_VOLUME = 100          # 1h 成交量低于 $100
+
+# ── AI 持仓分析 ──────────────────────────────────────────
+AI_ANALYSIS_INTERVAL = 300      # 每 5 分钟做一次 AI 分析
+AI_SELL_CONFIDENCE = 75         # AI 说 SELL 且 confidence >= 75 才执行
+
 
 @dataclass
 class Position:
@@ -72,6 +82,8 @@ class Position:
     entry_time: float = field(default_factory=time.time)
     # 卖出记录
     sell_log: list[str] = field(default_factory=list)
+    # AI 分析
+    last_ai_analysis: float = 0.0   # 上次 AI 分析时间
 
 
 class PositionMonitor:
@@ -132,12 +144,17 @@ class PositionMonitor:
         self._running = True
         logger.info("PositionMonitor(师傅级) started interval=%ds", PRICE_CHECK_INTERVAL)
         logger.info(
-            "止盈阶梯: %s | 移动止盈回撤: %d%% | 时间止损: %dmin | 破位止损: %d%%",
+            "止盈阶梯: %s | 移动止盈回撤: %d%% | 时间止损: %dmin | 破位止损: %d%% | AI分析: %ds",
             [f"{m}x→{p}%" for m, p, _ in TAKE_PROFIT_LEVELS],
             int(TRAILING_STOP_DROP * 100),
             TIME_STOP_MINUTES,
             int(CRASH_STOP_MULTIPLIER * 100),
+            AI_ANALYSIS_INTERVAL,
         )
+
+        # 启动时同步链上持仓
+        await self._sync_onchain_holdings()
+
         while self._running:
             await self._check_all()
             await asyncio.sleep(PRICE_CHECK_INTERVAL)
@@ -211,6 +228,18 @@ class PositionMonitor:
 
         # ── 策略5: 破位止损 ──────────────────────────────
         await self._check_crash_stop(pos, multiplier)
+
+        if pos.status == "closed":
+            return
+
+        # ── 策略6: 死币自动清理 ──────────────────────────
+        await self._check_dead_coin(pos, trade_info, multiplier)
+
+        if pos.status == "closed":
+            return
+
+        # ── 策略7: AI 持续分析（MiniMax M2.7）─────────────
+        await self._check_ai_holding(pos, data, trade_info, multiplier)
 
     # ── 策略1: 分批止盈 ──────────────────────────────────
 
@@ -330,6 +359,99 @@ class PositionMonitor:
                 pos.sell_log.append(f"破位止损 x={multiplier:.2f}")
                 pos.status = "closed"
 
+    # ── 策略6: 死币自动清理 ────────────────────────────────
+
+    async def _check_dead_coin(self, pos: Position, trade_info: dict, multiplier: float) -> None:
+        """市值/持仓人/成交量全部低于阈值 → 死币，自动清仓回收残值"""
+        mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
+        holders = int(trade_info.get("holder", 0) or 0)
+        vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+
+        is_dead = mc < DEAD_COIN_MC and holders < DEAD_COIN_HOLDERS and vol < DEAD_COIN_VOLUME
+
+        if not is_dead:
+            return
+
+        logger.info(
+            "💀 死币清理 ca=%s mc=$%.0f holders=%d vol=$%.0f x=%.2f",
+            pos.token_address, mc, holders, vol, multiplier,
+        )
+        success = await self._sell(pos, 100, "死币清理")
+        if success:
+            pos.sell_log.append(f"死币清理 mc=${mc:.0f} holders={holders} x={multiplier:.2f}")
+            pos.status = "closed"
+
+    # ── 策略7: AI 持仓分析（MiniMax M2.7）───────────────────
+
+    async def _check_ai_holding(
+        self, pos: Position, data: dict, trade_info: dict, multiplier: float
+    ) -> None:
+        """
+        定期用 MiniMax M2.7 分析持仓基本面变化。
+        AI 综合判断叙事热度、持仓人趋势、成交量趋势，给出 HOLD/SELL 建议。
+        """
+        if not minimax.available:
+            return
+
+        now = time.time()
+        if now - pos.last_ai_analysis < AI_ANALYSIS_INTERVAL:
+            return
+
+        pos.last_ai_analysis = now
+
+        name = data.get("baseSymbol") or data.get("name", "?")
+        symbol = data.get("baseSymbol") or data.get("symbol", "?")
+        description = data.get("description", "")
+        mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
+        holders = int(trade_info.get("holder", 0) or 0)
+        vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+
+        link_info = data.get("linkInfo") or {}
+
+        # 计算持仓人变化
+        holder_change = holders - pos.initial_holders if pos.volume_recorded else 0
+        # 计算成交量变化
+        vol_change_pct = 0.0
+        if pos.volume_recorded and pos.initial_volume > 0:
+            vol_change_pct = ((vol - pos.initial_volume) / pos.initial_volume) * 100
+
+        hold_minutes = (now - pos.entry_time) / 60
+
+        ai_result = await minimax.analyze_holding(
+            name=name,
+            symbol=symbol,
+            description=description,
+            market_cap=mc,
+            holders=holders,
+            holder_change=holder_change,
+            volume_1h=vol,
+            volume_change_pct=vol_change_pct,
+            price_multiplier=multiplier,
+            hold_minutes=hold_minutes,
+            has_website=bool(link_info.get("web")),
+            has_twitter=bool(link_info.get("x")),
+            has_telegram=bool(link_info.get("tg")),
+        )
+
+        action = ai_result.get("action", "HOLD")
+        confidence = ai_result.get("confidence", 0)
+        reason = ai_result.get("reason", "无")
+
+        logger.info(
+            "🤖 AI持仓分析 ca=%s %s(%s) action=%s confidence=%d reason=%s x=%.2f",
+            pos.token_address, name, symbol, action, confidence, reason, multiplier,
+        )
+
+        if action == "SELL" and confidence >= AI_SELL_CONFIDENCE:
+            logger.info(
+                "🤖 AI建议卖出 ca=%s confidence=%d%% reason=%s → 执行清仓",
+                pos.token_address, confidence, reason,
+            )
+            success = await self._sell(pos, 100, f"AI分析-{reason[:20]}")
+            if success:
+                pos.sell_log.append(f"AI卖出 confidence={confidence}% reason={reason}")
+                pos.status = "closed"
+
     # ── 卖出执行 ─────────────────────────────────────────
 
     async def _sell(self, pos: Position, sell_percent: int, reason: str) -> bool:
@@ -446,6 +568,88 @@ class PositionMonitor:
         except Exception as e:
             logger.error("加载持仓文件失败: %s", e)
             return 0
+
+    # ── 链上持仓同步 ─────────────────────────────────────
+
+    async def _sync_onchain_holdings(self) -> None:
+        """
+        启动时从 Solana 链上查询钱包实际持仓，
+        把 positions.json 里没有但链上有的代币自动加入监控。
+        """
+        wallet = config.wallet_address
+        if not wallet:
+            return
+
+        try:
+            import httpx
+
+            rpc_url = "https://api.mainnet-beta.solana.com"
+            known_cas = {p.token_address for p in self._positions}
+            new_count = 0
+
+            # 查 Token-2022 (大部分 PumpFun 币用这个)
+            for program_id in [
+                "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+            ]:
+                async with httpx.AsyncClient(timeout=15.0) as http:
+                    resp = await http.post(rpc_url, json={
+                        "jsonrpc": "2.0", "id": 1,
+                        "method": "getTokenAccountsByOwner",
+                        "params": [
+                            wallet,
+                            {"programId": program_id},
+                            {"encoding": "jsonParsed"},
+                        ],
+                    })
+                    data = resp.json()
+                    accounts = data.get("result", {}).get("value", [])
+
+                    for acc in accounts:
+                        info = acc.get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
+                        mint = info.get("mint", "")
+                        ui_amount = info.get("tokenAmount", {}).get("uiAmount", 0)
+
+                        if not mint or not ui_amount or ui_amount <= 0:
+                            continue
+                        if mint in known_cas:
+                            continue
+
+                        # 查询当前价格作为入场价
+                        try:
+                            token_data = await client.query_token(mint, "sol")
+                            if not isinstance(token_data, dict):
+                                continue
+                            ti = token_data.get("tradeInfo") or {}
+                            price = float(ti.get("price", 0) or 0)
+                            if price <= 0:
+                                continue
+
+                            name = token_data.get("baseSymbol") or "?"
+                            pos = Position(
+                                chain="sol",
+                                token_address=mint,
+                                wallet_address=wallet,
+                                entry_price=price,
+                                tip=config.tip,
+                                entry_time=time.time(),
+                            )
+                            self._positions.append(pos)
+                            known_cas.add(mint)
+                            new_count += 1
+                            logger.info("链上同步新持仓 %s ca=%s price=$%.8f", name, mint[:12], price)
+                        except Exception as e:
+                            logger.debug("sync token query error ca=%s: %s", mint[:12], e)
+                        await asyncio.sleep(3)
+
+            if new_count > 0:
+                self.save_positions()
+                logger.info("链上同步完成，新增 %d 个持仓", new_count)
+            else:
+                logger.info("链上同步完成，无新增持仓")
+
+        except Exception as e:
+            logger.error("链上持仓同步失败: %s", e)
 
     @property
     def positions(self) -> list[Position]:

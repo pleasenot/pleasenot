@@ -131,4 +131,108 @@ class MiniMaxClient:
             return {"score": 0, "verdict": "SKIP", "reason": str(e)}
 
 
+    async def analyze_holding(
+        self,
+        name: str,
+        symbol: str,
+        description: str = "",
+        market_cap: float = 0,
+        holders: int = 0,
+        holder_change: int = 0,
+        volume_1h: float = 0,
+        volume_change_pct: float = 0,
+        price_multiplier: float = 1.0,
+        hold_minutes: float = 0,
+        has_website: bool = False,
+        has_twitter: bool = False,
+        has_telegram: bool = False,
+    ) -> dict:
+        """
+        持仓中的代币持续分析：是继续持有还是卖出？
+
+        返回: {"action": "HOLD"|"SELL", "confidence": 0-100, "reason": str}
+        """
+        if not self.available:
+            return {"action": "HOLD", "confidence": 0, "reason": "MiniMax 未配置"}
+
+        socials = []
+        if has_website:
+            socials.append("官网")
+        if has_twitter:
+            socials.append("Twitter")
+        if has_telegram:
+            socials.append("Telegram")
+
+        holder_trend = f"+{holder_change}" if holder_change >= 0 else str(holder_change)
+        vol_trend = f"{volume_change_pct:+.0f}%" if volume_change_pct != 0 else "无变化"
+
+        system_prompt = """你是一个加密货币持仓分析师。你的任务是评估一个已持有的 Meme Coin 是否应该继续持有。
+
+分析维度：
+1. **基本面变化**（持仓人增减、成交量趋势）— 持仓人大幅下降或成交量骤降是危险信号
+2. **叙事热度**— 这个 meme 还有没有话题度？还是已经过气？
+3. **市值合理性**— 当前市值是否已经透支了潜力？
+4. **时间因素**— 持有太久没动静的币通常没有希望
+
+请直接输出 JSON：
+{"action": "HOLD"或"SELL", "confidence": 0-100, "reason": "一句话理由"}
+
+不要输出其他内容，只输出 JSON。"""
+
+        user_msg = (
+            f"代币: {name} ({symbol})\n"
+            f"描述: {description or '无'}\n"
+            f"当前市值: ${market_cap:,.0f}\n"
+            f"持仓人: {holders} (变化: {holder_trend})\n"
+            f"1h成交量: ${volume_1h:,.0f} (变化: {vol_trend})\n"
+            f"持仓盈亏: {price_multiplier:.2f}x\n"
+            f"已持有: {hold_minutes:.0f}分钟\n"
+            f"社交: {', '.join(socials) if socials else '无'}\n"
+            f"\n请分析是否应该继续持有。"
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as http:
+                resp = await http.post(
+                    MINIMAX_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        "max_completion_tokens": 500,
+                        "temperature": 0.3,
+                    },
+                )
+
+            if resp.status_code != 200:
+                logger.warning("MiniMax holding API error: %d", resp.status_code)
+                return {"action": "HOLD", "confidence": 0, "reason": f"API error {resp.status_code}"}
+
+            data = resp.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+
+            import json
+            result = json.loads(content.strip())
+            logger.info(
+                "MiniMax 持仓分析 %s(%s): action=%s confidence=%d reason=%s",
+                name, symbol, result.get("action", "?"),
+                result.get("confidence", 0), result.get("reason", "?"),
+            )
+            return result
+
+        except Exception as e:
+            logger.warning("MiniMax holding analyze error: %s", e)
+            return {"action": "HOLD", "confidence": 0, "reason": str(e)}
+
+
 minimax = MiniMaxClient()
