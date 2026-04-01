@@ -23,6 +23,7 @@ from signals.geckoterm_scanner import GeckoTermScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
 from trading.strategy_report import StrategyReporter
+from trading.trade_retrospective import TradeRetrospective
 from utils.logger import get_logger
 
 logger = get_logger("main")
@@ -91,13 +92,16 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     whale_tracker = WhaleTracker(scan_interval=30, max_signals_per_cycle=3)
     tasks.append(asyncio.create_task(whale_tracker.start(handle)))
 
-    # 仓位监控（止盈）+ 策略报告
+    # 仓位监控（止盈）+ 策略报告 + 交易复盘
     if not dry_run:
         # 启动前从 positions.json 恢复持仓
         loaded = engine.position_monitor.load_positions()
         logger.info("从文件恢复了 %d 个持仓", loaded)
         tasks.append(asyncio.create_task(engine.position_monitor.start()))
         tasks.append(asyncio.create_task(reporter.start()))
+        # 交易复盘（每小时分析历史交易，AI 深度分析每3小时一次）
+        retrospective = TradeRetrospective(engine=engine)
+        tasks.append(asyncio.create_task(retrospective.start()))
 
     # ALMOST 币扫描（即将完成 bonding curve，毕业前最后机会）
     feed_almost = FeedScanner(
