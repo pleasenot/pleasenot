@@ -87,7 +87,7 @@ class MiniMaxClient:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as http:
+            async with httpx.AsyncClient(timeout=15.0, verify=False) as http:
                 resp = await http.post(
                     MINIMAX_API_URL,
                     headers={
@@ -192,7 +192,7 @@ class MiniMaxClient:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as http:
+            async with httpx.AsyncClient(timeout=15.0, verify=False) as http:
                 resp = await http.post(
                     MINIMAX_API_URL,
                     headers={
@@ -232,6 +232,86 @@ class MiniMaxClient:
 
         except Exception as e:
             logger.warning("MiniMax holding analyze error: %s", e)
+            return {"action": "HOLD", "confidence": 0, "reason": str(e)}
+
+
+    async def analyze_holding_deep(self, context: str) -> dict:
+        """
+        深度持仓分析：接收完整的多维诊断报告，做最终研判。
+        比 analyze_holding 多了趋势数据、链上行为、同类对比、社交热度。
+
+        返回: {"action": "HOLD"|"SELL", "confidence": 0-100, "reason": str}
+        """
+        if not self.available:
+            return {"action": "HOLD", "confidence": 0, "reason": "MiniMax 未配置"}
+
+        system_prompt = """你是一个顶级加密货币 Meme Coin 持仓分析师。你会收到一份完整的代币诊断报告，包含：
+
+1. **趋势数据**：多个时间点的持仓人、成交量、价格变化曲线
+2. **链上行为**：聪明钱（Smart Money）的买卖动向、Dev 是否在抛售、大户集中度变化
+3. **同类对比**：和当前热门币的指标对比（持仓人、成交量、市值排名）
+4. **社交热度**：Reddit 提及次数、Twitter/Telegram 活跃度
+
+你需要综合所有维度判断：
+- 这个币还有没有上涨空间？
+- 基本面是在改善还是恶化？
+- 聪明钱在买还是在跑？
+- 社交热度是在升温还是冷却？
+
+关键原则：
+- 如果聪明钱在跑 + 成交量在缩 + 持仓人在降 → 强烈建议 SELL
+- 如果持仓人增长 + 成交量放大 + 聪明钱在买 → 建议 HOLD
+- 如果社交完全没有热度 + 市值极低 → 可能是死币，建议 SELL
+- 如果盈利超过 1.3x 但基本面恶化 → 建议 SELL 锁利
+- 如果亏损但基本面在改善 → 可以 HOLD 等反弹
+
+请直接输出 JSON：
+{"action": "HOLD"或"SELL", "confidence": 0-100, "reason": "详细理由（包含你看到的关键数据）"}
+
+不要输出其他内容，只输出 JSON。"""
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0, verify=False) as http:
+                resp = await http.post(
+                    MINIMAX_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": context},
+                        ],
+                        "max_completion_tokens": 800,
+                        "temperature": 0.3,
+                    },
+                )
+
+            if resp.status_code != 200:
+                logger.warning("MiniMax deep analysis API error: %d", resp.status_code)
+                return {"action": "HOLD", "confidence": 0, "reason": f"API error {resp.status_code}"}
+
+            data = resp.json()
+            content = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+
+            import json
+            result = json.loads(content.strip())
+            logger.info(
+                "MiniMax 深度分析: action=%s confidence=%d reason=%s",
+                result.get("action", "?"),
+                result.get("confidence", 0),
+                result.get("reason", "?"),
+            )
+            return result
+
+        except Exception as e:
+            logger.warning("MiniMax deep analysis error: %s", e)
             return {"action": "HOLD", "confidence": 0, "reason": str(e)}
 
 

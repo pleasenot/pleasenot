@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 
 from xxyy.client import client, XxyyAPIError
 from llm.minimax_client import minimax
+from trading.holding_analyzer import holding_analyzer
 from config import config
 from utils.logger import get_logger
 
@@ -381,14 +382,14 @@ class PositionMonitor:
             pos.sell_log.append(f"死币清理 mc=${mc:.0f} holders={holders} x={multiplier:.2f}")
             pos.status = "closed"
 
-    # ── 策略7: AI 持仓分析（MiniMax M2.7）───────────────────
+    # ── 策略7: AI 深度持仓分析（MiniMax M2.7）───────────────
 
     async def _check_ai_holding(
         self, pos: Position, data: dict, trade_info: dict, multiplier: float
     ) -> None:
         """
-        定期用 MiniMax M2.7 分析持仓基本面变化。
-        AI 综合判断叙事热度、持仓人趋势、成交量趋势，给出 HOLD/SELL 建议。
+        定期用 MiniMax M2.7 深度分析持仓。
+        收集多维数据（趋势、链上行为、同类对比、社交热度），交给 AI 做最终研判。
         """
         if not minimax.available:
             return
@@ -399,57 +400,46 @@ class PositionMonitor:
 
         pos.last_ai_analysis = now
 
-        name = data.get("baseSymbol") or data.get("name", "?")
-        symbol = data.get("baseSymbol") or data.get("symbol", "?")
-        description = data.get("description", "")
-        mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
-        holders = int(trade_info.get("holder", 0) or 0)
-        vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+        try:
+            # 用 HoldingAnalyzer 收集完整诊断数据
+            diag = await holding_analyzer.analyze(
+                token_address=pos.token_address,
+                chain=pos.chain,
+                entry_price=pos.entry_price,
+                entry_time=pos.entry_time,
+                initial_holders=pos.initial_holders,
+                initial_volume=pos.initial_volume,
+            )
 
-        link_info = data.get("linkInfo") or {}
-
-        # 计算持仓人变化
-        holder_change = holders - pos.initial_holders if pos.volume_recorded else 0
-        # 计算成交量变化
-        vol_change_pct = 0.0
-        if pos.volume_recorded and pos.initial_volume > 0:
-            vol_change_pct = ((vol - pos.initial_volume) / pos.initial_volume) * 100
-
-        hold_minutes = (now - pos.entry_time) / 60
-
-        ai_result = await minimax.analyze_holding(
-            name=name,
-            symbol=symbol,
-            description=description,
-            market_cap=mc,
-            holders=holders,
-            holder_change=holder_change,
-            volume_1h=vol,
-            volume_change_pct=vol_change_pct,
-            price_multiplier=multiplier,
-            hold_minutes=hold_minutes,
-            has_website=bool(link_info.get("web")),
-            has_twitter=bool(link_info.get("x")),
-            has_telegram=bool(link_info.get("tg")),
-        )
+            # 交给 MiniMax 深度分析
+            ai_result = await holding_analyzer.get_ai_verdict(diag)
+        except Exception as e:
+            logger.error("AI 深度分析异常 ca=%s: %s", pos.token_address, e)
+            return
 
         action = ai_result.get("action", "HOLD")
         confidence = ai_result.get("confidence", 0)
         reason = ai_result.get("reason", "无")
 
         logger.info(
-            "🤖 AI持仓分析 ca=%s %s(%s) action=%s confidence=%d reason=%s x=%.2f",
-            pos.token_address, name, symbol, action, confidence, reason, multiplier,
+            "🤖 AI深度分析 ca=%s %s action=%s confidence=%d x=%.2f\n"
+            "   趋势: 持仓人=%s 成交量=%s 价格=%s\n"
+            "   聪明钱: %s | 社交: %s\n"
+            "   理由: %s",
+            pos.token_address, diag.name, action, confidence, multiplier,
+            diag.holder_trend, diag.volume_trend, diag.price_trend,
+            diag.smart_money.net_action, diag.social.social_score,
+            reason,
         )
 
         if action == "SELL" and confidence >= AI_SELL_CONFIDENCE:
             logger.info(
-                "🤖 AI建议卖出 ca=%s confidence=%d%% reason=%s → 执行清仓",
-                pos.token_address, confidence, reason,
+                "🤖 AI建议卖出 ca=%s confidence=%d%% → 执行清仓",
+                pos.token_address, confidence,
             )
-            success = await self._sell(pos, 100, f"AI分析-{reason[:20]}")
+            success = await self._sell(pos, 100, f"AI深度分析-{reason[:20]}")
             if success:
-                pos.sell_log.append(f"AI卖出 confidence={confidence}% reason={reason}")
+                pos.sell_log.append(f"AI深度卖出 confidence={confidence}% reason={reason}")
                 pos.status = "closed"
 
     # ── 卖出执行 ─────────────────────────────────────────
@@ -592,7 +582,7 @@ class PositionMonitor:
                 "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
                 "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
             ]:
-                async with httpx.AsyncClient(timeout=15.0) as http:
+                async with httpx.AsyncClient(timeout=15.0, verify=False) as http:
                     resp = await http.post(rpc_url, json={
                         "jsonrpc": "2.0", "id": 1,
                         "method": "getTokenAccountsByOwner",
