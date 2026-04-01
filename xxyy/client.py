@@ -215,11 +215,19 @@ class XxyyClient:
 
     # ── 钱包 ──────────────────────────────────────────────
 
-    async def list_wallets(self, chain: str, page: int = 1, size: int = 20) -> list[dict]:
-        return await self._get("/wallets", chain=chain, pageNum=page, pageSize=size)
+    async def list_wallets(self, chain: str, page: int = 1, size: int = 20,
+                           token_address: str = "") -> list[dict]:
+        params = dict(chain=chain, pageNum=page, pageSize=size)
+        if token_address:
+            params["tokenAddress"] = token_address
+        return await self._get("/wallets", **params)
 
-    async def wallet_info(self, wallet_address: str, chain: str) -> dict:
-        return await self._get("/wallet/info", walletAddress=wallet_address, chain=chain)
+    async def wallet_info(self, wallet_address: str, chain: str,
+                          token_address: str = "") -> dict:
+        params = dict(walletAddress=wallet_address, chain=chain)
+        if token_address:
+            params["tokenAddress"] = token_address
+        return await self._get("/wallet/info", **params)
 
     async def wallet_holdings(self, wallet_address: str, chain: str) -> list[dict]:
         """查询钱包持有的所有代币"""
@@ -260,12 +268,14 @@ class XxyyClient:
         tip: float | None = None,
         slippage: int = 20,
         model: int = 1,
+        priority_fee: float | None = None,
     ) -> str:
         """
         发起买入或卖出，返回 txId。
         卖出时 amount 为百分比(1-100)。
         model: 1=防夹子模式(默认), 2=快速模式
         slippage: 滑点容差百分比(0-100, 默认20)
+        priority_fee: Solana 额外优先费(SOL)，网络拥堵时提高成交率
         """
         body = {
             "chain": chain,
@@ -277,6 +287,8 @@ class XxyyClient:
             "model": model,
             "slippage": slippage,
         }
+        if priority_fee is not None and chain == "sol":
+            body["priorityFee"] = priority_fee
         result = await self._post("/swap", body)
         if isinstance(result, dict):
             tx_id = result.get("signature") or result.get("txId")

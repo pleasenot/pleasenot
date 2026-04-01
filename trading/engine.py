@@ -261,8 +261,8 @@ class TradingEngine:
             result = await self._wait_trade_result(tx_id)
             status = result.get("status") if isinstance(result, dict) else None
 
-            if status == 2:
-                # 链上成功
+            # 兼容字符串和数字格式的 status
+            if status == 2 or status == "success":
                 record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
                 if is_buy:
                     record.score = analysis.score
@@ -273,8 +273,7 @@ class TradingEngine:
                 self._on_trade_done(record)
                 return record
 
-            if status == 3 and is_buy and attempt < max_attempts:
-                # 链上失败，重试
+            if (status == 3 or status == "failed") and is_buy and attempt < max_attempts:
                 logger.warning("🔄 链上执行失败，%d秒后重试 ca=%s attempt=%d/%d",
                                self.BUY_RETRY_DELAY, signal.token_address, attempt, max_attempts)
                 await asyncio.sleep(self.BUY_RETRY_DELAY)
@@ -285,7 +284,7 @@ class TradingEngine:
             if is_buy:
                 record.score = analysis.score
                 record.tier = self._get_tier_name(analysis.score)
-            record.status = "failed" if status == 3 else "unknown"
+            record.status = "failed" if (status == 3 or status == "failed") else "unknown"
             record.result = result if isinstance(result, dict) else {}
             self._history.append(record)
             self._on_trade_done(record)

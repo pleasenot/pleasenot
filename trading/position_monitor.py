@@ -759,97 +759,37 @@ class PositionMonitor:
 
     async def _sync_onchain_holdings(self) -> None:
         """
-        启动时从 Solana 链上查询钱包实际持仓，
-        1. 删除 positions.json 里有但链上已不存在的代币（已卖出）
-        2. 添加链上有但 positions.json 里没有的代币（新买入）
+        通过 XXYY wallet API 查询钱包实际持仓，替代直接调用 Solana RPC。
+        1. 逐个检查本地持仓的代币是否链上还有余额（用 wallet/info?tokenAddress=）
+        2. 清理已卖出的持仓
         """
         wallet = config.wallet_address
+        chain = config.default_chain
         if not wallet:
             return
 
         try:
-            import httpx
+            stale = []
+            for pos in self._positions:
+                if pos.status == "closed":
+                    continue
+                try:
+                    info = await client.wallet_info(wallet, chain, token_address=pos.token_address)
+                    token_bal = (info or {}).get("tokenBalance") or {}
+                    ui_amount = float(token_bal.get("uiAmount", 0) or 0)
+                    if ui_amount <= 0:
+                        stale.append(pos)
+                except Exception as e:
+                    # 查询失败不清理，保守处理
+                    logger.debug("sync check ca=%s error: %s", pos.token_address[:12], e)
+                await asyncio.sleep(3)  # 避免 429
 
-            rpc_url = "https://api.mainnet-beta.solana.com"
-            onchain_mints: set[str] = set()  # 链上实际持有的代币
-
-            # 查询链上所有代币持仓
-            for program_id in [
-                "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-                "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-            ]:
-                async with httpx.AsyncClient(timeout=15.0, verify=False) as http:
-                    resp = await http.post(rpc_url, json={
-                        "jsonrpc": "2.0", "id": 1,
-                        "method": "getTokenAccountsByOwner",
-                        "params": [
-                            wallet,
-                            {"programId": program_id},
-                            {"encoding": "jsonParsed"},
-                        ],
-                    })
-                    data = resp.json()
-                    accounts = data.get("result", {}).get("value", [])
-
-                    for acc in accounts:
-                        info = acc.get("account", {}).get("data", {}).get("parsed", {}).get("info", {})
-                        mint = info.get("mint", "")
-                        ui_amount = info.get("tokenAmount", {}).get("uiAmount", 0)
-
-                        if mint and ui_amount and ui_amount > 0:
-                            onchain_mints.add(mint)
-
-            # ── 第1步：清理已卖出的持仓 ──
-            # 安全检查：如果 RPC 返回空数据（网络故障/rate limit），跳过清理防止误删
-            open_positions = [p for p in self._positions if p.status != "closed"]
-            if not onchain_mints and open_positions:
-                logger.warning("链上同步: RPC 返回空数据，跳过清理防止误删 (%d 个持仓)", len(open_positions))
-                return
-
-            before_count = len(self._positions)
-            stale = [p for p in self._positions if p.token_address not in onchain_mints]
             if stale:
+                stale_cas = {p.token_address for p in stale}
                 for p in stale:
                     logger.info("清理已卖出持仓 ca=%s (链上已无余额)", p.token_address[:16])
-                self._positions = [p for p in self._positions if p.token_address in onchain_mints]
+                self._positions = [p for p in self._positions if p.token_address not in stale_cas]
                 logger.info("清理完成，移除 %d 个已卖出持仓", len(stale))
-
-            # ── 第2步：添加链上新持仓 ──
-            known_cas = {p.token_address for p in self._positions}
-            new_count = 0
-
-            for mint in onchain_mints:
-                if mint in known_cas:
-                    continue
-
-                try:
-                    token_data = await client.query_token(mint, "sol")
-                    if not isinstance(token_data, dict):
-                        continue
-                    ti = token_data.get("tradeInfo") or {}
-                    price = float(ti.get("price", 0) or 0)
-                    if price <= 0:
-                        continue
-
-                    name = token_data.get("baseSymbol") or "?"
-                    pos = Position(
-                        chain="sol",
-                        token_address=mint,
-                        wallet_address=wallet,
-                        entry_price=price,
-                        tip=config.tip,
-                        entry_time=time.time(),
-                    )
-                    self._positions.append(pos)
-                    known_cas.add(mint)
-                    new_count += 1
-                    logger.info("链上同步新持仓 %s ca=%s price=$%.8f", name, mint[:12], price)
-                except Exception as e:
-                    logger.debug("sync token query error ca=%s: %s", mint[:12], e)
-                await asyncio.sleep(3)
-
-            changed = len(stale) > 0 or new_count > 0
-            if changed:
                 self.save_positions()
                 logger.info("链上同步完成，移除 %d / 新增 %d", len(stale), new_count)
             else:
