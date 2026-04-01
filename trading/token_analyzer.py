@@ -78,8 +78,8 @@ class TokenAnalyzer:
         if holders < 5:
             result.fatal.append(f"持仓人不足5({holders})，太早期")
             return result
-        if vol < 500:
-            result.fatal.append(f"1h成交量不足$500(${vol:,.0f})，无人气")
+        if vol < 200:
+            result.fatal.append(f"1h成交量不足$200(${vol:,.0f})，无人气")
             return result
         if mc < 2000:
             result.fatal.append(f"市值不足$2k(${mc:,.0f})，太小")
