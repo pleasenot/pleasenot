@@ -2,7 +2,7 @@
 import asyncio
 from typing import Callable
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from xxyy.client import client
 from config import config
 from utils.logger import get_logger
@@ -25,7 +25,7 @@ class AiTrendingScanner(BaseSignalSource):
         self.chain = chain or config.default_chain
         self.interval = interval or config.feed_interval
         self.max_signals_per_cycle = max_signals_per_cycle
-        self._seen: set[str] = set()
+        self._seen = TTLSet(ttl=1800)  # 30分钟过期
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:
         logger.info(

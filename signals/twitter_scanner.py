@@ -16,7 +16,7 @@ import asyncio
 import re
 from typing import Callable
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from signals.celebrity_config import (
     CELEBRITY_ACCOUNTS, CELEBRITY_HANDLES, S_TIER,
     CRYPTO_TRIGGER_WORDS,
@@ -83,8 +83,8 @@ class TwitterScanner(BaseSignalSource):
         self.accounts = accounts or CELEBRITY_HANDLES
         self.chain = chain
         self.interval = interval
-        self._seen_tweets: set[str] = set()
-        self._seen_kol_txs: set[str] = set()
+        self._seen_tweets = TTLSet(ttl=3600)   # 1小时过期
+        self._seen_kol_txs = TTLSet(ttl=3600)  # 1小时过期
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:
         logger.info(

@@ -2,7 +2,7 @@
 import asyncio
 from typing import Callable
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from signals.ai_keywords import is_ai_related
 from xxyy.client import client
 from config import config
@@ -40,7 +40,7 @@ class FeedScanner(BaseSignalSource):
         self.interval = interval or config.feed_interval
         self.max_signals_per_cycle = max_signals_per_cycle
         self.ai_only = ai_only
-        self._seen: set[str] = set()
+        self._seen = TTLSet(ttl=1800)  # 30分钟过期
 
     def _is_safe(self, token: dict) -> tuple[bool, str]:
         """基础安全检查，返回 (是否安全, 原因)"""

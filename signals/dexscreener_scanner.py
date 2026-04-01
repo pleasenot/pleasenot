@@ -14,7 +14,7 @@ from typing import Callable
 
 import httpx
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,7 +41,7 @@ class DexScreenerScanner(BaseSignalSource):
     ):
         self.chain = chain
         self.max_signals_per_cycle = max_signals_per_cycle
-        self._seen: set[str] = set()
+        self._seen = TTLSet(ttl=1800)  # 30分钟过期
         self._last_scan: dict[str, float] = {}
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:

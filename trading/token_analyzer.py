@@ -111,6 +111,9 @@ class TokenAnalyzer:
         # ── 8. AI 智能研判（MiniMax）─────────────────────
         await self._check_ai_verdict(data, link_info, result)
 
+        # 封顶 100 分，防止高分失去区分度
+        result.score = min(result.score, 100)
+
         # 有一票否决项直接不过
         if result.fatal:
             result.passed = False

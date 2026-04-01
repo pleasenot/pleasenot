@@ -13,7 +13,7 @@ from typing import Callable
 
 import httpx
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,7 +34,7 @@ class GeckoTermScanner(BaseSignalSource):
     ):
         self.network = network
         self.max_signals_per_cycle = max_signals_per_cycle
-        self._seen: set[str] = set()
+        self._seen = TTLSet(ttl=1800)  # 30分钟过期
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:
         logger.info("GeckoTermScanner started network=%s", self.network)

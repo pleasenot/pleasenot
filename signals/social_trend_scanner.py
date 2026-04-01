@@ -19,7 +19,7 @@ import asyncio
 import re
 from typing import Callable
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from signals.meme_keywords import is_meme_related, REDDIT_SUBREDDITS
 from xxyy.client import client
 from config import config
@@ -46,7 +46,7 @@ class SocialTrendScanner(BaseSignalSource):
         self.chain = chain or config.default_chain
         self.interval = interval          # 社交平台扫描间隔（秒）
         self.feed_interval = feed_interval or config.feed_interval
-        self._seen_tokens: set[str] = set()
+        self._seen_tokens = TTLSet(ttl=1800)  # 30分钟过期
         self._trending_words: set[str] = set()  # 当前热点词
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:

@@ -15,7 +15,7 @@ from typing import Callable
 
 import httpx
 
-from signals.base import BaseSignalSource, TradeSignal
+from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,7 +45,7 @@ class PumpFunScanner(BaseSignalSource):
         self.min_liquidity = min_liquidity
         self.min_volume_5m = min_volume_5m
         self.max_age_minutes = max_age_minutes
-        self._seen: set[str] = set()
+        self._seen = TTLSet(ttl=1800)  # 30分钟过期
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:
         logger.info(

@@ -290,7 +290,7 @@ class PositionMonitor:
                     "🎯 触发止盈[%s] ca=%s x=%.2f 卖出%d%%",
                     desc, pos.token_address, multiplier, sell_pct,
                 )
-                success = await self._sell(pos, sell_pct, f"止盈[{desc}]")
+                success = await self._sell(pos, sell_pct, f"止盈[{desc}]", multiplier)
                 if success:
                     pos.tp_level = i + 1
                     pos.sell_log.append(f"{desc} x={multiplier:.2f}")
@@ -321,7 +321,7 @@ class PositionMonitor:
                 pos.token_address, pos.highest_price, current_price,
                 drop_from_high * 100, multiplier,
             )
-            success = await self._sell(pos, TRAILING_SELL_PERCENT, "移动止盈")
+            success = await self._sell(pos, TRAILING_SELL_PERCENT, "移动止盈", multiplier)
             if success:
                 pos.sell_log.append(f"移动止盈 回撤{drop_from_high*100:.1f}% x={multiplier:.2f}")
                 pos.status = "closed"
@@ -337,7 +337,7 @@ class PositionMonitor:
                 "⏰ 时间止损 ca=%s 已持仓%.0f分钟 仅%.2fx 未达%.1fx 清仓",
                 pos.token_address, elapsed_min, multiplier, TIME_STOP_MIN_MULTIPLIER,
             )
-            success = await self._sell(pos, TIME_STOP_SELL_PERCENT, "时间止损")
+            success = await self._sell(pos, TIME_STOP_SELL_PERCENT, "时间止损", multiplier)
             if success:
                 pos.sell_log.append(f"时间止损 {elapsed_min:.0f}min x={multiplier:.2f}")
                 pos.status = "closed"
@@ -365,7 +365,7 @@ class PositionMonitor:
                 "📊 动量衰退(成交量) ca=%s volume降至%.0f%% x=%.2f 清仓",
                 pos.token_address, volume_ratio * 100, multiplier,
             )
-            success = await self._sell(pos, 100, "动量衰退-成交量")
+            success = await self._sell(pos, 100, "动量衰退-成交量", multiplier)
             if success:
                 pos.sell_log.append(f"动量衰退 vol={volume_ratio*100:.0f}% x={multiplier:.2f}")
                 pos.status = "closed"
@@ -376,7 +376,7 @@ class PositionMonitor:
                 "📊 动量衰退(持仓人) ca=%s holders从%d降至%d x=%.2f 清仓",
                 pos.token_address, pos.initial_holders, current_holders, multiplier,
             )
-            success = await self._sell(pos, 100, "动量衰退-持仓人")
+            success = await self._sell(pos, 100, "动量衰退-持仓人", multiplier)
             if success:
                 pos.sell_log.append(f"动量衰退 holders={current_holders}/{pos.initial_holders} x={multiplier:.2f}")
                 pos.status = "closed"
@@ -390,7 +390,7 @@ class PositionMonitor:
                 "💀 破位止损 ca=%s 跌至%.2fx（入场价的%d%%）清仓保残",
                 pos.token_address, multiplier, int(multiplier * 100),
             )
-            success = await self._sell(pos, CRASH_STOP_SELL_PERCENT, "破位止损")
+            success = await self._sell(pos, CRASH_STOP_SELL_PERCENT, "破位止损", multiplier)
             if success:
                 pos.sell_log.append(f"破位止损 x={multiplier:.2f}")
                 pos.status = "closed"
@@ -412,7 +412,7 @@ class PositionMonitor:
             "💀 死币清理 ca=%s mc=$%.0f holders=%d vol=$%.0f x=%.2f",
             pos.token_address, mc, holders, vol, multiplier,
         )
-        success = await self._sell(pos, 100, "死币清理")
+        success = await self._sell(pos, 100, "死币清理", multiplier)
         if success:
             pos.sell_log.append(f"死币清理 mc=${mc:.0f} holders={holders} x={multiplier:.2f}")
             pos.status = "closed"
@@ -478,7 +478,7 @@ class PositionMonitor:
                 "🤖 AI建议卖出 ca=%s confidence=%d%% → 执行清仓",
                 pos.token_address, confidence,
             )
-            success = await self._sell(pos, 100, f"AI深度分析-{reason[:20]}")
+            success = await self._sell(pos, 100, f"AI深度分析-{reason[:20]}", multiplier)
             if success:
                 pos.sell_log.append(f"AI深度卖出 confidence={confidence}% reason={reason}")
                 pos.status = "closed"
@@ -488,7 +488,7 @@ class PositionMonitor:
     SELL_RETRY_MAX = 3
     SELL_RETRY_DELAY = 3
 
-    async def _sell(self, pos: Position, sell_percent: int, reason: str) -> bool:
+    async def _sell(self, pos: Position, sell_percent: int, reason: str, multiplier: float = 1.0) -> bool:
         """执行卖出，失败自动重试，返回是否成功"""
         for attempt in range(1, self.SELL_RETRY_MAX + 1):
             try:
@@ -521,8 +521,10 @@ class PositionMonitor:
                     "✅ 卖出成功[%s] ca=%s %d%% txId=%s",
                     reason, pos.token_address, sell_percent, tx_id,
                 )
-                if self._safety and "止损" in reason:
-                    self._safety.record_loss(0.05)
+                # 记录实际亏损（multiplier < 1.0 = 亏损）
+                if self._safety and multiplier < 1.0:
+                    est_loss = config.buy_amount * (1.0 - multiplier) * (sell_percent / 100.0)
+                    self._safety.record_loss(est_loss)
                 if sell_percent == 100:
                     self._graveyard[pos.token_address] = {
                         "sell_time": time.time(),
@@ -616,7 +618,12 @@ class PositionMonitor:
             for d in data:
                 if d["token_address"] in known:
                     continue
-                # 恢复持仓时重置 entry_time 为当前时间，避免时间止损误触发
+                # 恢复持仓时保留原始 entry_time（文件里有就用文件的，没有就用当前时间）
+                saved_entry_time = d.get("entry_time", 0)
+                # 合法性检查：entry_time 不能在未来，也不能太古老（>7天视为异常）
+                now = time.time()
+                if saved_entry_time <= 0 or saved_entry_time > now or (now - saved_entry_time) > 7 * 86400:
+                    saved_entry_time = now
                 pos = Position(
                     chain=d["chain"],
                     token_address=d["token_address"],
@@ -627,7 +634,7 @@ class PositionMonitor:
                     tp_level=d.get("tp_level", 0),
                     highest_price=d.get("highest_price", 0.0),
                     trailing_active=d.get("trailing_active", False),
-                    entry_time=time.time(),
+                    entry_time=saved_entry_time,
                 )
                 self._positions.append(pos)
                 count += 1
