@@ -50,7 +50,7 @@ VOLUME_DROP_THRESHOLD = 0.3     # 成交量降至30%以下才触发（从50%放�
 HOLDER_DROP_THRESHOLD = 0.8     # 持仓人降至80%以下（从90%放宽）
 
 # ── 破位止损 ─────────────────────────────────────────────
-CRASH_STOP_MULTIPLIER = 0.35    # 跌破入场价65%才止损（从50%放宽，小注扛得住）
+CRASH_STOP_MULTIPLIER = 0.50    # 跌破入场价50%止损（从35%收紧，及早割肉减少损失）
 CRASH_STOP_SELL_PERCENT = 100
 
 # ── 死币自动清理 ─────────────────────────────────────────
@@ -59,9 +59,9 @@ DEAD_COIN_HOLDERS = 3           # 持仓人低于 3
 DEAD_COIN_VOLUME = 30           # 1h 成交量低于 $30
 
 # ── AI 持仓分析 ──────────────────────────────────────────
-AI_ANALYSIS_INTERVAL = 1200     # 每 20 分钟做一次 AI 分析（给币发酵时间）
-AI_SELL_CONFIDENCE = 85         # AI 说 SELL 且 confidence >= 85 才执行（提高门槛）
-AI_FIRST_ANALYSIS_DELAY = 900   # 买入后 15 分钟才做第一次 AI 分析
+AI_ANALYSIS_INTERVAL = 1800     # 每 30 分钟做一次 AI 分析（从20min放宽，减少误杀）
+AI_SELL_CONFIDENCE = 92         # AI 说 SELL 且 confidence >= 92 才执行（从85提高，减少误杀）
+AI_FIRST_ANALYSIS_DELAY = 1800  # 买入后 30 分钟才做第一次 AI 分析（从15min延长，给足发酵时间）
 
 # ── 链上同步 ────────────────────────────────────────────
 ONCHAIN_SYNC_INTERVAL = 120     # 每 2 分钟同步一次链上持仓
@@ -427,6 +427,11 @@ class PositionMonitor:
         收集多维数据（趋势、链上行为、同类对比、社交热度），交给 AI 做最终研判。
         """
         if not minimax.available:
+            return
+
+        # 盈利中的币不需要 AI 判断卖出（让止盈阶梯和移动止盈来管）
+        # AI 只负责判断亏损/横盘的币是否还有希望
+        if multiplier >= 1.5:
             return
 
         now = time.time()
