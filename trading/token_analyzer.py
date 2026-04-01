@@ -12,6 +12,9 @@
 8. AI 智能研判 — MiniMax 大模型分析叙事质量
 """
 from dataclasses import dataclass, field
+
+import httpx
+
 from xxyy.client import client
 from llm.minimax_client import minimax
 from config import config
@@ -96,6 +99,9 @@ class TokenAnalyzer:
         # ── 5. 交易热度 ─────────────────────────────────
         self._check_volume(trade_info, result)
 
+        # ── 5b. 成交量动量（DexScreener）────────────────
+        await self._check_volume_momentum(token_address, result)
+
         # ── 6. 社交信号 ─────────────────────────────────
         self._check_socials(link_info, data, result)
 
@@ -130,17 +136,17 @@ class TokenAnalyzer:
 
         # PumpFun 上几乎所有币都 noMint+noFreeze+locked，降低白送分
         if no_mint and no_freeze:
-            result.score += 5
-            result.reasons.append("+5 合约安全(noMint+noFreeze)")
+            result.score += 2
+            result.reasons.append("+2 合约安全(noMint+noFreeze)")
         elif no_mint or no_freeze:
-            result.score += 3
-            result.reasons.append(f"+3 合约部分安全")
+            result.score += 1
+            result.reasons.append(f"+1 合约部分安全")
         else:
             result.fatal.append("合约未放弃权限，有 rug 风险")
 
         if locked:
-            result.score += 3
-            result.reasons.append("+3 流动性已锁定")
+            result.score += 1
+            result.reasons.append("+1 流动性已锁定")
 
     # ── 筹码分布 ────────────────────────────────────────────
 
@@ -263,6 +269,86 @@ class TokenAnalyzer:
             result.score += 0
             result.reasons.append(f"+0 成交量冷清(${vol:,.0f}, {trade_num}笔)")
 
+    # ── 成交量动量（DexScreener 免费 API）───────────────────
+
+    async def _check_volume_momentum(self, token_address: str, result: AnalysisResult) -> None:
+        """
+        用 DexScreener 免费 API 获取多时间框架成交量，计算动量和买压。
+        - momentum = volume_5m / (volume_1h / 12)  — >1.5 加速, <0.5 衰退
+        - buy_pressure = buys_5m / (buys_5m + sells_5m) — >0.6 看多
+        DexScreener 查询失败不影响整体分析。
+        """
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10.0) as http:
+                resp = await http.get(
+                    f"https://api.dexscreener.com/latest/dex/tokens/{token_address}"
+                )
+                if resp.status_code != 200:
+                    logger.debug("DexScreener volume query failed status=%d ca=%s", resp.status_code, token_address)
+                    result.reasons.append("+0 DexScreener成交量查询失败")
+                    return
+
+                data = resp.json()
+                pairs = data.get("pairs")
+                if not pairs:
+                    result.reasons.append("+0 DexScreener无交易对数据")
+                    return
+
+                # 取流动性最大的交易对
+                pair = max(pairs, key=lambda p: float((p.get("liquidity") or {}).get("usd", 0) or 0))
+
+                volume = pair.get("volume") or {}
+                txns = pair.get("txns") or {}
+
+                vol_5m = float(volume.get("m5", 0) or 0)
+                vol_1h = float(volume.get("h1", 0) or 0)
+
+                txns_5m = txns.get("m5") or {}
+                buys_5m = int(txns_5m.get("buys", 0) or 0)
+                sells_5m = int(txns_5m.get("sells", 0) or 0)
+
+                # 计算动量: 5分钟成交量 vs 1小时均值的5分钟切片
+                if vol_1h > 0:
+                    momentum = vol_5m / (vol_1h / 12)
+                else:
+                    momentum = 0.0
+
+                # 计算买压
+                total_txns_5m = buys_5m + sells_5m
+                if total_txns_5m > 0:
+                    buy_pressure = buys_5m / total_txns_5m
+                else:
+                    buy_pressure = 0.5  # 无数据时中性
+
+                # 动量评分
+                if momentum > 1.5:
+                    result.score += 10
+                    result.reasons.append(f"+10 成交量加速(动量{momentum:.1f}x)")
+                elif momentum < 0.5:
+                    result.score -= 10
+                    result.reasons.append(f"-10 成交量衰退(动量{momentum:.1f}x)")
+                else:
+                    result.reasons.append(f"+0 成交量动量平稳({momentum:.1f}x)")
+
+                # 买压评分
+                if buy_pressure > 0.6:
+                    result.score += 8
+                    result.reasons.append(f"+8 买压强劲({buy_pressure:.0%})")
+                elif buy_pressure < 0.4:
+                    result.score -= 8
+                    result.reasons.append(f"-8 卖压沉重({buy_pressure:.0%})")
+                else:
+                    result.reasons.append(f"+0 买卖压平衡({buy_pressure:.0%})")
+
+                logger.debug(
+                    "volume momentum ca=%s momentum=%.2f buy_pressure=%.2f vol_5m=%.0f vol_1h=%.0f",
+                    token_address, momentum, buy_pressure, vol_5m, vol_1h,
+                )
+
+        except Exception as e:
+            logger.debug("DexScreener volume momentum failed ca=%s: %s", token_address, e)
+            result.reasons.append("+0 DexScreener动量检测跳过")
+
     # ── 社交信号 ────────────────────────────────────────────
 
     def _check_socials(self, link_info: dict, data: dict, result: AnalysisResult) -> None:
@@ -281,14 +367,14 @@ class TokenAnalyzer:
             social_count += 1
 
         if social_count >= 3:
-            result.score += 10
-            result.reasons.append("+10 社交齐全(官网+Twitter+TG)")
-        elif social_count >= 2:
             result.score += 5
-            result.reasons.append(f"+5 有{social_count}个社交渠道")
+            result.reasons.append("+5 社交齐全(官网+Twitter+TG)")
+        elif social_count >= 2:
+            result.score += 3
+            result.reasons.append(f"+3 有{social_count}个社交渠道")
         elif social_count == 1:
-            result.score += 2
-            result.reasons.append("+2 仅有1个社交渠道")
+            result.score += 1
+            result.reasons.append("+1 仅有1个社交渠道")
         else:
             result.score += 0
             result.reasons.append("+0 无社交信息")

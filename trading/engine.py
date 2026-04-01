@@ -16,6 +16,11 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ── 信号去重缓存 ────────────────────────────────────────────
+# 同一个 CA 在 DEDUP_TTL 秒内不重复处理（跨信号源去重）
+DEDUP_TTL = 300  # 5 分钟
+
+
 @dataclass
 class TradeRecord:
     signal: TradeSignal
@@ -28,6 +33,12 @@ class TradeRecord:
 
 
 class TradingEngine:
+    # ── 并发分析参数 ─────────────────────────────────────────
+    CONCURRENT_ANALYSES = 3     # 最多 3 个信号同时分析
+    # ── 重试参数 ──────────────────────────────────────────────
+    BUY_RETRY_MAX = 2
+    BUY_RETRY_DELAY = 3
+
     def __init__(
         self,
         wallet_address: str | None = None,
@@ -43,24 +54,28 @@ class TradingEngine:
         self.on_result = on_result
         self._history: list[TradeRecord] = []
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap
+        self._analysis_sem = asyncio.Semaphore(self.CONCURRENT_ANALYSES)  # 并发分析限制
         self._signal_queue: asyncio.Queue = asyncio.Queue()
         self._processing: set[str] = set()  # 正在处理的 CA，防止并发分析同一个币
         self._rejected_cache: set[str] = set()  # 已拒绝的 CA 缓存，避免重复分析
+        self._signal_seen: dict[str, float] = {}  # 跨信号源去重 {ca: timestamp}
         self.position_monitor = PositionMonitor()
         self.analyzer = TokenAnalyzer()
         self.safety = SafetyGuard()
         self.position_monitor.set_safety(self.safety)
         self.position_monitor._on_signal = self.handle_signal  # 墓地复活信号回调
         self.reporter = None  # 由 main.py 注入
-        # 启动信号消费者
-        self._consumer_task = None
+        self._consumer_tasks: list[asyncio.Task] = []
 
     def start_consumer(self):
-        """启动信号队列消费者（在 main.py 的 run() 中调用）"""
-        self._consumer_task = asyncio.create_task(self._consume_signals())
+        """启动多个信号消费者（并发分析，swap 仍串行）"""
+        for i in range(self.CONCURRENT_ANALYSES):
+            task = asyncio.create_task(self._consume_signals())
+            self._consumer_tasks.append(task)
+        logger.info("信号消费者启动: %d 个并发分析器", self.CONCURRENT_ANALYSES)
 
     async def _consume_signals(self):
-        """串行消费信号队列，避免 XXYY API 429"""
+        """消费信号队列，分析可并发，swap 串行"""
         while True:
             signal = await self._signal_queue.get()
             try:
@@ -71,8 +86,15 @@ class TradingEngine:
                 self._processing.discard(signal.token_address)
                 self._signal_queue.task_done()
 
+    def _cleanup_dedup(self) -> None:
+        """清理过期的去重缓存"""
+        now = time.time()
+        expired = [ca for ca, ts in self._signal_seen.items() if now - ts > DEDUP_TTL]
+        for ca in expired:
+            del self._signal_seen[ca]
+
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
-        """收到信号后放入队列（非阻塞），由消费者串行处理"""
+        """收到信号后放入队列（非阻塞），由消费者并发处理"""
         if not self.wallet_address:
             logger.error("未配置 WALLET_ADDRESS，跳过信号 ca=%s", signal.token_address)
             return None
@@ -85,6 +107,11 @@ class TradingEngine:
             # 已在处理中
             if ca in self._processing:
                 return None
+            # 跨信号源去重：同一个 CA 5 分钟内只处理一次
+            now = time.time()
+            if ca in self._signal_seen and now - self._signal_seen[ca] < DEDUP_TTL:
+                if signal.source != "graveyard_revive":
+                    return None
             # 已被拒绝过（墓地复活信号除外，给二次机会）
             if ca in self._rejected_cache:
                 if signal.source == "graveyard_revive":
@@ -96,18 +123,24 @@ class TradingEngine:
             if ca in held:
                 return None
             self._processing.add(ca)
+            self._signal_seen[ca] = now
 
         logger.info(
             "信号触发 action=%s ca=%s chain=%s source=%s",
             signal.action, signal.token_address, signal.chain, signal.source,
         )
 
-        # 放入队列串行处理
+        # 放入队列
         await self._signal_queue.put(signal)
+
+        # 定期清理去重缓存
+        if len(self._signal_seen) > 500:
+            self._cleanup_dedup()
+
         return None
 
     async def _process_signal(self, signal: TradeSignal) -> TradeRecord | None:
-        """实际处理信号（由消费者串行调用）"""
+        """实际处理信号（分析可并发，swap 串行）"""
         is_buy = signal.action == "buy"
 
         # 再次检查持仓（可能队列等待期间已买入）
@@ -117,9 +150,10 @@ class TradingEngine:
                 logger.info("已持仓，跳过重复买入 ca=%s", signal.token_address)
                 return None
 
-        # 买入前先做全面分析 + 分档投入
+        # 买入前先做全面分析（可并发，受 _analysis_sem 限制）
         if is_buy:
-            analysis = await self.analyzer.analyze(signal.token_address, signal.chain)
+            async with self._analysis_sem:
+                analysis = await self.analyzer.analyze(signal.token_address, signal.chain)
             logger.info("分析结果:\n%s", analysis.summary())
             if not analysis.passed:
                 logger.info("分析未通过，跳过买入 ca=%s score=%d", signal.token_address, analysis.score)
@@ -213,10 +247,6 @@ class TradingEngine:
 
         return None
 
-    # ── 重试参数 ──────────────────────────────────────────────
-    BUY_RETRY_MAX = 2       # 买入最多尝试 2 次（1次原始 + 1次重试）
-    BUY_RETRY_DELAY = 3     # 重试间隔 3 秒
-
     async def _wait_trade_result(self, tx_id: str) -> dict:
         """轮询链上交易结果"""
         try:
@@ -268,12 +298,11 @@ class TradingEngine:
                         )
                         await asyncio.sleep(self.REGISTER_RETRY_DELAY)
                         continue
-                    # 最后一次仍失败，标记价格待定（-1），让 monitor 下次 check 时补上真实价格
                     logger.error(
                         "⚠️ 无法获取入场价格 ca=%s，标记待定，等 monitor 补价",
                         record.signal.token_address,
                     )
-                    entry_price = -1.0  # 待定标记，monitor 首次查到价格时会补上
+                    entry_price = -1.0
                 pos = Position(
                     chain=record.signal.chain,
                     token_address=record.signal.token_address,
@@ -292,7 +321,6 @@ class TradingEngine:
                     )
                     await asyncio.sleep(self.REGISTER_RETRY_DELAY)
                 else:
-                    # 最终兜底：标记价格待定，确保仓位不丢
                     logger.error(
                         "⚠️ 仓位登记最终失败 ca=%s，标记待定强制登记: %s",
                         record.signal.token_address, e,
@@ -306,10 +334,8 @@ class TradingEngine:
                     )
                     self.position_monitor.add(pos)
 
-    # ── 分档投入（广撒网策略）─────────────────────────────────
-    # 小注为主，顶级才加码，拉跨也敢少量试
-    # 顶级(≥90): 2x | 人上人(≥75): 1.5x | NPC(≥50): 1x | 探路(≥40): 0.5x
-
+    # ── 动态仓位管理 ─────────────────────────────────────────
+    # 根据持仓数量、近期胜率动态调整买入金额
     TIERS = [
         (90, 2.0, "顶级"),
         (75, 1.5, "人上人"),
@@ -318,15 +344,35 @@ class TradingEngine:
     ]
 
     def _calc_buy_amount(self, score: int) -> float:
+        base = self.buy_amount
+
+        # 动态调整1：持仓越多，单笔越小（资金分散保护）
+        open_count = len([p for p in self.position_monitor.positions if p.status != "closed"])
+        if open_count >= 15:
+            base *= 0.5
+        elif open_count >= 10:
+            base *= 0.7
+
+        # 动态调整2：近期连亏则缩仓（回撤保护）
+        recent = self._history[-10:]
+        if len(recent) >= 5:
+            recent_buys = [r for r in recent if r.signal.action == "buy"]
+            if recent_buys:
+                fail_rate = sum(1 for r in recent_buys if r.status == "failed") / len(recent_buys)
+                if fail_rate >= 0.6:
+                    base *= 0.5
+                    logger.info("动态缩仓: 近期失败率%.0f%%，仓位减半", fail_rate * 100)
+
+        # 分档投入
         for min_score, multiplier, tier_name in self.TIERS:
             if score >= min_score:
-                amount = self.buy_amount * multiplier
+                amount = base * multiplier
                 logger.info(
-                    "分档投入: score=%d tier=%s multiplier=%.1fx amount=%.3f",
-                    score, tier_name, multiplier, amount,
+                    "分档投入: score=%d tier=%s multiplier=%.1fx amount=%.3f (base=%.3f)",
+                    score, tier_name, multiplier, amount, base,
                 )
                 return amount
-        return self.buy_amount
+        return base
 
     def _get_tier_name(self, score: int) -> str:
         for min_score, _, tier_name in self.TIERS:

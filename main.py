@@ -16,7 +16,9 @@ from signals.ai_trending_scanner import AiTrendingScanner
 from signals.twitter_scanner import TwitterScanner
 from signals.social_trend_scanner import SocialTrendScanner
 from signals.dexscreener_scanner import DexScreenerScanner
+from signals.whale_tracker import WhaleTracker
 from signals.pumpfun_scanner import PumpFunScanner
+from signals.pumpfun_bonding_scanner import PumpFunBondingScanner
 from signals.geckoterm_scanner import GeckoTermScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
@@ -77,9 +79,17 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     pump_scanner = PumpFunScanner(max_signals_per_cycle=3)
     tasks.append(asyncio.create_task(pump_scanner.start(handle)))
 
+    # Pump.fun Bonding Curve 即将毕业扫描（毕业前抢跑，每20秒扫一次）
+    bonding_scanner = PumpFunBondingScanner(max_signals_per_cycle=2)
+    tasks.append(asyncio.create_task(bonding_scanner.start(handle)))
+
     # GeckoTerminal 热门池子（与 DexScreener 互补）
     gecko_scanner = GeckoTermScanner(network="solana", max_signals_per_cycle=2)
     tasks.append(asyncio.create_task(gecko_scanner.start(handle)))
+
+    # 鲸鱼钱包追踪（监控已知聪明钱的链上买入）
+    whale_tracker = WhaleTracker(scan_interval=30, max_signals_per_cycle=3)
+    tasks.append(asyncio.create_task(whale_tracker.start(handle)))
 
     # 仓位监控（止盈）+ 策略报告
     if not dry_run:
