@@ -138,14 +138,16 @@ class XxyyClient:
         await self._client.aclose()
 
     async def _wait_throttle(self) -> None:
-        """全局请求节流"""
-        async with self._throttle:
-            import time
-            now = time.monotonic()
-            wait = self._min_interval - (now - self._last_request)
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._last_request = time.monotonic()
+        """全局请求节流（不持锁 sleep，避免阻塞所有并发请求）"""
+        while True:
+            async with self._throttle:
+                now = time.monotonic()
+                wait = self._min_interval - (now - self._last_request)
+                if wait <= 0:
+                    self._last_request = time.monotonic()
+                    return
+            # 释放锁再 sleep，不阻塞其他协程
+            await asyncio.sleep(wait)
 
     def _cache_get(self, key: str) -> Any | None:
         """查缓存，未命中或过期返回 None"""

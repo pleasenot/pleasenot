@@ -358,21 +358,21 @@ class TokenAnalyzer:
 
                 # 动量评分
                 if momentum > 1.5:
-                    result.score += 10
-                    result.reasons.append(f"+10 成交量加速(动量{momentum:.1f}x)")
+                    result.score += 8
+                    result.reasons.append(f"+8 成交量加速(动量{momentum:.1f}x)")
                 elif momentum < 0.5:
-                    result.score -= 10
-                    result.reasons.append(f"-10 成交量衰退(动量{momentum:.1f}x)")
+                    result.score -= 3
+                    result.reasons.append(f"-3 成交量偏弱(动量{momentum:.1f}x)")
                 else:
                     result.reasons.append(f"+0 成交量动量平稳({momentum:.1f}x)")
 
-                # 买压评分
+                # 买压评分（惩罚减轻，早期币数据不稳定）
                 if buy_pressure > 0.6:
-                    result.score += 8
-                    result.reasons.append(f"+8 买压强劲({buy_pressure:.0%})")
+                    result.score += 5
+                    result.reasons.append(f"+5 买压强劲({buy_pressure:.0%})")
                 elif buy_pressure < 0.4:
-                    result.score -= 8
-                    result.reasons.append(f"-8 卖压沉重({buy_pressure:.0%})")
+                    result.score -= 2
+                    result.reasons.append(f"-2 卖压偏重({buy_pressure:.0%})")
                 else:
                     result.reasons.append(f"+0 买卖压平衡({buy_pressure:.0%})")
 

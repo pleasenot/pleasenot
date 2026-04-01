@@ -255,6 +255,10 @@ class TradingEngine:
             except XxyyAPIError as e:
                 logger.error("swap 失败 ca=%s attempt=%d/%d error=%s",
                              signal.token_address, attempt, max_attempts, e)
+                # 8054 = 代币不可交易（已毕业/池子不支持），不计入连续失败
+                if e.code == 8054:
+                    logger.info("跳过不可交易的代币 ca=%s", signal.token_address)
+                    return None
                 if is_buy and attempt < max_attempts:
                     logger.info("⏳ %d秒后重试 ca=%s", self.BUY_RETRY_DELAY, signal.token_address)
                     await asyncio.sleep(self.BUY_RETRY_DELAY)

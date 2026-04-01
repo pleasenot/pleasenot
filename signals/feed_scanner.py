@@ -52,7 +52,7 @@ class FeedScanner(BaseSignalSource):
         filters: dict | None = None,
         interval: int | None = None,
         max_signals_per_cycle: int = 1,
-        ai_only: bool = True,
+        ai_only: bool = False,
     ):
         self.chain = chain or config.default_chain
         self.feed_type = feed_type
