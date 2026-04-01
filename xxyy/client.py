@@ -126,16 +126,23 @@ class XxyyClient:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=30.0,
         )
+        # swap 专用客户端（独立连接，不被查询请求堵塞）
+        self._swap_client = httpx.AsyncClient(
+            base_url=BASE,
+            headers={"Authorization": f"Bearer {config.api_key}"},
+            timeout=30.0,
+        )
         # 全局请求节流：避免并发请求触发 429
         self._throttle = asyncio.Semaphore(1)
         self._min_interval = 1.2  # 最小请求间隔（秒），官方限制 1 QPS，留余量防 429
         self._last_request = 0.0
-        # 查询结果缓存：{cache_key: (timestamp, data)}
+        # 查询结果缓存
         self._cache: dict[str, tuple[float, Any]] = {}
-        self._max_cache = 200  # 最多缓存 200 条
+        self._max_cache = 200
 
     async def close(self):
         await self._client.aclose()
+        await self._swap_client.aclose()
 
     async def _wait_throttle(self) -> None:
         """全局请求节流（不持锁 sleep，避免阻塞所有并发请求）"""
@@ -291,7 +298,13 @@ class XxyyClient:
         }
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
-        result = await self._post("/swap", body)
+        # swap 用独立客户端，不走全局节流队列（避免被查询请求堵塞导致 8054）
+        try:
+            resp = await self._swap_client.post(f"{PREFIX}/swap", json=body)
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            api_health.record_failure(f"swap 网络异常: {e}")
+            raise
+        result = self._parse(resp)
         if isinstance(result, dict):
             tx_id = result.get("signature") or result.get("txId")
         else:
