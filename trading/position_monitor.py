@@ -478,53 +478,66 @@ class PositionMonitor:
 
     # ── 卖出执行 ─────────────────────────────────────────
 
+    SELL_RETRY_MAX = 3
+    SELL_RETRY_DELAY = 3
+
     async def _sell(self, pos: Position, sell_percent: int, reason: str) -> bool:
-        """执行卖出，返回是否成功"""
-        try:
-            async with self._swap_lock:
-                tx_id = await client.swap(
-                    chain=pos.chain,
-                    wallet_address=pos.wallet_address,
-                    token_address=pos.token_address,
-                    is_buy=False,
-                    amount=sell_percent,
-                    tip=pos.tip,
+        """执行卖出，失败自动重试，返回是否成功"""
+        for attempt in range(1, self.SELL_RETRY_MAX + 1):
+            try:
+                async with self._swap_lock:
+                    tx_id = await client.swap(
+                        chain=pos.chain,
+                        wallet_address=pos.wallet_address,
+                        token_address=pos.token_address,
+                        is_buy=False,
+                        amount=sell_percent,
+                        tip=pos.tip,
+                    )
+            except XxyyAPIError as e:
+                logger.error("卖出API失败[%s] ca=%s attempt=%d/%d error=%s",
+                             reason, pos.token_address, attempt, self.SELL_RETRY_MAX, e)
+                if attempt < self.SELL_RETRY_MAX:
+                    await asyncio.sleep(self.SELL_RETRY_DELAY)
+                    continue
+                return False
+
+            logger.info("卖出提交[%s] txId=%s ca=%s %d%%", reason, tx_id, pos.token_address, sell_percent)
+
+            result = await client.wait_trade(tx_id)
+            raw_status = result.get("status") if isinstance(result, dict) else None
+            if raw_status == 2:
+                logger.info(
+                    "✅ 卖出成功[%s] ca=%s %d%% txId=%s",
+                    reason, pos.token_address, sell_percent, tx_id,
                 )
-        except XxyyAPIError as e:
-            logger.error("卖出失败[%s] ca=%s error=%s", reason, pos.token_address, e)
-            return False
+                # 记录亏损到安全护栏（仅在亏损时）
+                if self._safety and "止损" in reason:
+                    self._safety.record_loss(0.05)
+                # 卖出 100% 时加入墓地，后续定期回查复活
+                if sell_percent == 100:
+                    self._graveyard[pos.token_address] = {
+                        "sell_time": time.time(),
+                        "sell_price": pos.highest_price or pos.entry_price,
+                        "chain": pos.chain,
+                        "reason": reason,
+                    }
+                    logger.info("🪦 加入墓地监控 ca=%s reason=%s", pos.token_address[:16], reason)
+                self.save_positions()
+                # 写入交易信号汇总
+                self._log_sell_signal(pos, sell_percent, reason, tx_id)
+                return True
+            else:
+                logger.error(
+                    "❌ 卖出链上失败[%s] ca=%s attempt=%d/%d txId=%s status=%s",
+                    reason, pos.token_address, attempt, self.SELL_RETRY_MAX, tx_id, raw_status,
+                )
+                if attempt < self.SELL_RETRY_MAX:
+                    await asyncio.sleep(self.SELL_RETRY_DELAY)
+                    continue
+                return False
 
-        logger.info("卖出提交[%s] txId=%s ca=%s %d%%", reason, tx_id, pos.token_address, sell_percent)
-
-        result = await client.wait_trade(tx_id)
-        raw_status = result.get("status") if isinstance(result, dict) else None
-        if raw_status == 2:
-            logger.info(
-                "✅ 卖出成功[%s] ca=%s %d%% txId=%s",
-                reason, pos.token_address, sell_percent, tx_id,
-            )
-            # 记录亏损到安全护栏（仅在亏损时）
-            if self._safety and "止损" in reason:
-                self._safety.record_loss(0.05)
-            # 卖出 100% 时加入墓地，后续定期回查复活
-            if sell_percent == 100:
-                self._graveyard[pos.token_address] = {
-                    "sell_time": time.time(),
-                    "sell_price": pos.highest_price or pos.entry_price,
-                    "chain": pos.chain,
-                    "reason": reason,
-                }
-                logger.info("🪦 加入墓地监控 ca=%s reason=%s", pos.token_address[:16], reason)
-            self.save_positions()
-            # 写入交易信号汇总
-            self._log_sell_signal(pos, sell_percent, reason, tx_id)
-            return True
-        else:
-            logger.error(
-                "❌ 卖出链上失败[%s] ca=%s txId=%s status=%s",
-                reason, pos.token_address, tx_id, raw_status,
-            )
-            return False
+        return False
 
     SIGNAL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "trade_signals.log")
 
