@@ -20,6 +20,9 @@ from signals.whale_tracker import WhaleTracker
 from signals.pumpfun_scanner import PumpFunScanner
 from signals.pumpfun_bonding_scanner import PumpFunBondingScanner
 from signals.geckoterm_scanner import GeckoTermScanner
+from signals.kol_scanner import KolBuyScanner
+from signals.smart_money_scanner import SmartMoneyScanner
+from signals.trending_scanner import TrendingScanner
 from signals.base import TradeSignal
 from trading.engine import TradingEngine, TradeRecord
 from trading.strategy_report import StrategyReporter
@@ -91,6 +94,18 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     # 鲸鱼钱包追踪（监控已知聪明钱的链上买入）
     whale_tracker = WhaleTracker(scan_interval=30, max_signals_per_cycle=3)
     tasks.append(asyncio.create_task(whale_tracker.start(handle)))
+
+    # KOL 买入信号（XXYY API，跟单 KOL 大佬）
+    kol_scanner = KolBuyScanner(chain=config.default_chain, interval=30, max_signals_per_cycle=2)
+    tasks.append(asyncio.create_task(kol_scanner.start(handle)))
+
+    # 聪明钱/大户买入信号（XXYY API，跟单 Smart Money）
+    smart_money = SmartMoneyScanner(chain=config.default_chain, interval=30, max_signals_per_cycle=2)
+    tasks.append(asyncio.create_task(smart_money.start(handle)))
+
+    # 热门代币信号（XXYY API，5分钟热度榜）
+    trending = TrendingScanner(chain=config.default_chain, interval=60, period="5M", max_signals_per_cycle=2)
+    tasks.append(asyncio.create_task(trending.start(handle)))
 
     # 仓位监控（止盈）+ 策略报告 + 交易复盘
     if not dry_run:

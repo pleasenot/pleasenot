@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from config import config
 from llm.minimax_client import minimax
+from xxyy.client import client
 from utils.logger import get_logger
 
 logger = get_logger("retrospective")
@@ -397,6 +398,39 @@ class TradeRetrospective:
 
         return recs
 
+    async def enrich_with_pnl(self, trades: list[CompleteTrade]) -> dict:
+        """用 XXYY PNL API 查询真实盈亏数据，返回 {ca: pnl_data}"""
+        pnl_map: dict[str, dict] = {}
+        wallet = config.wallet_address
+        if not wallet:
+            return pnl_map
+
+        unique_cas = {t.ca for t in trades}
+        for ca in unique_cas:
+            try:
+                pnl_data = await client.pnl(wallet, ca, config.default_chain)
+                if pnl_data and isinstance(pnl_data, dict):
+                    pnl_map[ca] = pnl_data
+            except Exception:
+                pass
+            await asyncio.sleep(1)  # 避免 429
+
+        return pnl_map
+
+    async def fetch_trade_history(self, page: int = 1, size: int = 20) -> list[dict]:
+        """从 XXYY API 获取真实交易记录"""
+        wallet = config.wallet_address
+        if not wallet:
+            return []
+        try:
+            result = await client.trades(wallet, config.default_chain, page=page, size=size)
+            if isinstance(result, dict):
+                return result.get("list", [])
+            return []
+        except Exception as e:
+            logger.debug("获取交易历史失败: %s", e)
+            return []
+
     def generate_report_text(self) -> str:
         """生成完整的复盘报告文本"""
         report = self.analyze()
@@ -714,6 +748,20 @@ class TradeRetrospective:
                 # 每次都输出基础统计报告
                 report_text = self.generate_report_text()
                 logger.info(report_text)
+
+                # 用真实 PNL 数据补充报告
+                try:
+                    if self._trades:
+                        pnl_map = await self.enrich_with_pnl(self._trades)
+                        if pnl_map:
+                            total_pnl = sum(float(d.get("pnl", 0) or 0) for d in pnl_map.values())
+                            total_pnl_usd = sum(float(d.get("pnlusd", 0) or 0) for d in pnl_map.values())
+                            logger.info(
+                                "【真实PNL】%d个代币 | 总PNL: %.4f SOL ($%.2f)",
+                                len(pnl_map), total_pnl, total_pnl_usd,
+                            )
+                except Exception as e:
+                    logger.debug("PNL查询失败: %s", e)
 
                 # 基础自动调参（规则驱动，每次都跑）
                 if self._engine:

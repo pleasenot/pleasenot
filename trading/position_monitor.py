@@ -201,6 +201,20 @@ class PositionMonitor:
             # 每个持仓查完后等 3 秒，避免连续打 API 触发 429
             await asyncio.sleep(3)
 
+    async def _fetch_real_pnl(self, pos: Position) -> dict | None:
+        """尝试获取真实 PNL 数据，失败返回 None"""
+        try:
+            pnl_data = await client.pnl(
+                wallet_address=pos.wallet_address,
+                token_address=pos.token_address,
+                chain=pos.chain,
+            )
+            if pnl_data and isinstance(pnl_data, dict) and pnl_data.get("buy"):
+                return pnl_data
+        except Exception as e:
+            logger.debug("PNL查询失败 ca=%s: %s", pos.token_address[:12], e)
+        return None
+
     async def _check_position(self, pos: Position) -> None:
         data = await client.query_token(pos.token_address, pos.chain)
         if not isinstance(data, dict):
@@ -528,8 +542,19 @@ class PositionMonitor:
                 )
                 # 记录实际亏损（multiplier < 1.0 = 亏损）
                 if self._safety and multiplier < 1.0:
-                    est_loss = config.buy_amount * (1.0 - multiplier) * (sell_percent / 100.0)
-                    self._safety.record_loss(est_loss)
+                    # 尝试用真实 PNL API 获取准确亏损
+                    real_loss = None
+                    try:
+                        pnl_data = await self._fetch_real_pnl(pos)
+                        if pnl_data and pnl_data.get("pnl") is not None:
+                            pnl_val = float(pnl_data["pnl"])
+                            if pnl_val < 0:
+                                real_loss = abs(pnl_val) * (sell_percent / 100.0)
+                                logger.info("PNL真实亏损 ca=%s pnl=%.4f SOL", pos.token_address[:12], real_loss)
+                    except Exception:
+                        pass
+                    loss = real_loss if real_loss is not None else config.buy_amount * (1.0 - multiplier) * (sell_percent / 100.0)
+                    self._safety.record_loss(loss)
                 if sell_percent == 100:
                     self._graveyard[pos.token_address] = {
                         "sell_time": time.time(),

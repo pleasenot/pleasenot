@@ -295,19 +295,8 @@ class XxyyClient:
     # ── KOL 跟单 ──────────────────────────────────────────
 
     async def kol_buys(self, chain: str = "sol") -> list[dict]:
-        """获取 KOL 买入列表。API 路径可能需要调整。"""
-        try:
-            result = await self._get("/kol/buys", chain=chain)
-        except (XxyyAPIError, httpx.HTTPStatusError) as e:
-            if "404" in str(e) or (isinstance(e, XxyyAPIError) and e.code == 404):
-                logger.debug("kol/buys endpoint not available")
-                return []
-            raise
-        if isinstance(result, list):
-            return result
-        if isinstance(result, dict):
-            return result.get("items", [])
-        return []
+        """获取 KOL 买入列表（兼容旧接口，内部转发到 kol_buy_list）"""
+        return await self.kol_buy_list(chain=chain)
 
     async def smart_wallets(self, token_address: str, chain: str = "sol") -> list[dict]:
         """查询某代币的聪明钱持仓信息。API 路径可能需要调整。"""
@@ -324,7 +313,47 @@ class XxyyClient:
             return result.get("items", [])
         return []
 
+    # ── PNL 查询 ──────────────────────────────────────────
+
+    async def pnl(self, wallet_address: str, token_address: str, chain: str = "sol") -> dict:
+        """查询钱包-代币对的真实盈亏数据（最近30天）"""
+        cache_key = f"pnl:{chain}:{wallet_address}:{token_address}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        result = await self._get("/pnl", walletAddress=wallet_address, tokenAddress=token_address, chain=chain)
+        if isinstance(result, dict):
+            self._cache_set(cache_key, result)
+        return result or {}
+
+    # ── 交易历史 ──────────────────────────────────────────
+
+    async def trades(self, wallet_address: str, chain: str = "sol",
+                     token_address: str = "", page: int = 1, size: int = 20) -> dict:
+        """分页查询成功交易记录，返回 {pageNum, pageSize, total, list}"""
+        params = dict(walletAddress=wallet_address, chain=chain, pageNum=page, pageSize=size)
+        if token_address:
+            params["tokenAddress"] = token_address
+        return await self._get("/trades", **params) or {}
+
+    # ── KOL / Smart Money 信号 ────────────────────────────
+
+    async def kol_buy_list(self, chain: str = "sol") -> list[dict]:
+        """获取 KOL 最近买入列表"""
+        result = await self._get("/kol-buy-list", chain=chain)
+        return result if isinstance(result, list) else []
+
+    async def tag_holder_buy_list(self, chain: str = "sol") -> list[dict]:
+        """获取聪明钱/大户最近买入列表"""
+        result = await self._get("/tag-holder-buy-list", chain=chain)
+        return result if isinstance(result, list) else []
+
     # ── AI 信号 ───────────────────────────────────────────
+
+    async def signal_list(self, chain: str = "sol", signal_type: str = "open-ai-trending") -> list[dict]:
+        """获取 AI 趋势信号列表"""
+        result = await self._post(f"/signal-list?type={signal_type}&chain={chain}", {})
+        return result if isinstance(result, list) else []
 
     async def ai_trending(self, chain: str = "sol") -> list[dict]:
         """获取 AI 热点代币列表。API 路径可能需要调整。"""
@@ -340,6 +369,13 @@ class XxyyClient:
         if isinstance(result, dict):
             return result.get("items", [])
         return []
+
+    # ── 热门代币 ──────────────────────────────────────────
+
+    async def trending_list(self, chain: str = "sol", period: str = "5M") -> list[dict]:
+        """获取热门代币列表，period: 1M/5M/30M/1H/6H/24H"""
+        result = await self._post(f"/trending-list?chain={chain}", {"period": period})
+        return result if isinstance(result, list) else []
 
     # ── Feed 扫描 ─────────────────────────────────────────
 
