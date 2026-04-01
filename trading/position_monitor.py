@@ -25,41 +25,43 @@ logger = get_logger(__name__)
 PRICE_CHECK_INTERVAL = 60  # 每 60 秒查一轮价格（避免 429）
 
 # ── 止盈阶梯 ─────────────────────────────────────────────
-# 核心策略：快速回本，利润奔跑
+# 核心逻辑：土狗赚钱靠一笔 10x-100x 覆盖所有亏损
+# 不要急着跑，让利润奔跑！
 # (倍数阈值, 卖出百分比, 描述)
 TAKE_PROFIT_LEVELS = [
-    (2.0,  50, "2x翻倍回本"),       # 翻倍先回本金（小注不急着跑）
-    (5.0,  30, "5x锁一点利润"),     # 5倍卖30%
-    (10.0, 20, "10x再锁一点"),      # 10倍卖20%，大头继续飞
-    (50.0, 30, "50x大肉落袋"),      # 50倍再卖30%
-    (100.0, 50, "100x半仓落袋"),    # 百倍卖一半
+    (2.0,  30, "2x翻倍减仓30%"),    # 翻倍只减30%，保留大头
+    (5.0,  20, "5x锁一点利润"),     # 5倍只卖20%
+    (10.0, 20, "10x再锁一点"),      # 10倍再卖20%
+    (50.0, 30, "50x大肉落袋"),      # 50倍卖30%
+    (100.0, 50, "100x半仓落袋"),    # 百倍卖一半，剩下永远留着
 ]
 
 # ── 移动止盈 ─────────────────────────────────────────────
-TRAILING_STOP_DROP = 0.15       # 从最高点回撤15%触发卖出（收紧，保利润）
+TRAILING_STOP_DROP = 0.30       # 从最高点回撤30%才触发（给波动空间）
 TRAILING_SELL_PERCENT = 100     # 移动止盈触发后全部卖出
 
 # ── 时间止损 ─────────────────────────────────────────────
-TIME_STOP_MINUTES = 30          # 小注给30分钟，多一点耐心
-TIME_STOP_MIN_MULTIPLIER = 1.05 # 30分钟至少涨5%才留（门槛也降低）
+TIME_STOP_MINUTES = 45          # 给45分钟发酵期，meme币需要时间
+TIME_STOP_MIN_MULTIPLIER = 1.0  # 45分钟不亏就留着（不要求涨）
 TIME_STOP_SELL_PERCENT = 100
 
 # ── 动量衰退 ─────────────────────────────────────────────
-VOLUME_DROP_THRESHOLD = 0.5     # 成交量降至首次记录的50%以下
-HOLDER_DROP_THRESHOLD = 0.9     # 持仓人数降至首次记录的90%以下
+VOLUME_DROP_THRESHOLD = 0.3     # 成交量降至30%以下才触发（从50%放宽）
+HOLDER_DROP_THRESHOLD = 0.8     # 持仓人降至80%以下（从90%放宽）
 
 # ── 破位止损 ─────────────────────────────────────────────
-CRASH_STOP_MULTIPLIER = 0.5     # 跌破入场价50%
+CRASH_STOP_MULTIPLIER = 0.35    # 跌破入场价65%才止损（从50%放宽，小注扛得住）
 CRASH_STOP_SELL_PERCENT = 100
 
 # ── 死币自动清理 ─────────────────────────────────────────
-DEAD_COIN_MC = 1500             # 市值低于 $1.5k（买入门槛降了，这也降）
+DEAD_COIN_MC = 1000             # 市值低于 $1k
 DEAD_COIN_HOLDERS = 3           # 持仓人低于 3
-DEAD_COIN_VOLUME = 50           # 1h 成交量低于 $50
+DEAD_COIN_VOLUME = 30           # 1h 成交量低于 $30
 
 # ── AI 持仓分析 ──────────────────────────────────────────
-AI_ANALYSIS_INTERVAL = 300      # 每 5 分钟做一次 AI 分析
-AI_SELL_CONFIDENCE = 75         # AI 说 SELL 且 confidence >= 75 才执行
+AI_ANALYSIS_INTERVAL = 1200     # 每 20 分钟做一次 AI 分析（给币发酵时间）
+AI_SELL_CONFIDENCE = 85         # AI 说 SELL 且 confidence >= 85 才执行（提高门槛）
+AI_FIRST_ANALYSIS_DELAY = 900   # 买入后 15 分钟才做第一次 AI 分析
 
 # ── 链上同步 ────────────────────────────────────────────
 ONCHAIN_SYNC_INTERVAL = 120     # 每 2 分钟同步一次链上持仓
@@ -421,6 +423,12 @@ class PositionMonitor:
             return
 
         now = time.time()
+
+        # 买入后一段时间内不做 AI 分析，给币发酵时间
+        age = now - pos.entry_time
+        if age < AI_FIRST_ANALYSIS_DELAY:
+            return
+
         if now - pos.last_ai_analysis < AI_ANALYSIS_INTERVAL:
             return
 
