@@ -84,6 +84,9 @@ class TokenAnalyzer:
         if mc < 2000:
             result.fatal.append(f"市值不足$2k(${mc:,.0f})，太小")
             return result
+        if mc > 500_000:
+            result.fatal.append(f"市值超$500k(${mc:,.0f})，打新不碰大市值")
+            return result
 
         # ── 1. 安全性检查（一票否决 + 加分）──────────────
         self._check_security(security_info, trade_info, result)
@@ -259,22 +262,19 @@ class TokenAnalyzer:
     def _check_market_cap(self, trade_info: dict, result: AnalysisResult) -> None:
         mc = float(trade_info.get("marketCapUsd", 0) or trade_info.get("marketCapUSD", 0) or 0)
 
-        # 早期介入甜区：$3k - $100k（土狗就是要早）
-        if 3_000 <= mc <= 50_000:
+        # 打新甜区：$3k - $500k（越早越好，大市值在硬性门槛已被拦截）
+        if 3_000 <= mc <= 30_000:
+            result.score += 15
+            result.reasons.append(f"+15 市值极早期(${mc:,.0f})")
+        elif 30_000 < mc <= 100_000:
             result.score += 12
-            result.reasons.append(f"+12 市值极早期甜区(${mc:,.0f})")
-        elif 50_000 < mc <= 200_000:
-            result.score += 10
-            result.reasons.append(f"+10 市值甜区(${mc:,.0f})")
-        elif 200_000 < mc <= 1_000_000:
-            result.score += 7
-            result.reasons.append(f"+7 市值适中(${mc:,.0f})")
-        elif 1_000_000 < mc <= 5_000_000:
+            result.reasons.append(f"+12 市值早期甜区(${mc:,.0f})")
+        elif 100_000 < mc <= 300_000:
+            result.score += 8
+            result.reasons.append(f"+8 市值中期(${mc:,.0f})")
+        elif 300_000 < mc <= 500_000:
             result.score += 4
             result.reasons.append(f"+4 市值偏高(${mc:,.0f})")
-        elif mc > 5_000_000:
-            result.score += 2
-            result.reasons.append(f"+2 市值高，上行有限(${mc:,.0f})")
         else:
             result.score += 0
             result.reasons.append(f"+0 市值过低(${mc:,.0f})")
