@@ -128,7 +128,7 @@ class XxyyClient:
         )
         # 全局请求节流：避免并发请求触发 429
         self._throttle = asyncio.Semaphore(1)
-        self._min_interval = 1.0  # 最小请求间隔（秒），官方限制 1 QPS
+        self._min_interval = 1.2  # 最小请求间隔（秒），官方限制 1 QPS，留余量防 429
         self._last_request = 0.0
         # 查询结果缓存：{cache_key: (timestamp, data)}
         self._cache: dict[str, tuple[float, Any]] = {}
