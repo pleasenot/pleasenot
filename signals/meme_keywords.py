@@ -60,6 +60,62 @@ TRENDING_MEMES = [
     "slop", "ai slop",                 # AI 生成内容梗
 ]
 
+# ── 中文 meme / 华语圈热点 ──────────────────────────────
+CHINESE_MEMES = [
+    # 动物 / 神兽
+    "龙", "dragon", "熊猫", "panda", "猴", "猴子",
+    "仙鹤", "锦鲤", "麒麟", "凤凰", "蛇",
+
+    # 中国文化 IP
+    "悟空", "wukong", "孙悟空", "大圣",
+    "哪吒", "nezha",
+    "三体", "三体人", "dark forest",
+    "功夫", "kungfu", "kung fu",
+    "太极", "taichi",
+    "财神", "god of wealth",
+    "红包", "hongbao",
+    "嫦娥", "chang'e",
+
+    # 中文网络梗 / 流行语
+    "绝绝子", "yyds", "永远的神",
+    "内卷", "involution",
+    "躺平", "lying flat",
+    "摆烂", "let it rot",
+    "社死", "social death",
+    "二次元", "waifu", "husbando",
+    "打工人", "worker", "996",
+    "韭菜", "leek",
+    "梭哈", "all in",
+    "暴富", "暴涨",
+    "割韭菜",
+    "冲", "冲冲冲",
+    "上车",
+    "钻石手", "纸手",
+
+    # 华人名人/热点
+    "习近平", "xi jinping",
+    "马斯克", "musk",
+    "cz", "赵长鹏",
+    "孙宇晨", "justin sun",
+    "李嘉诚",
+
+    # 中国节日/事件
+    "春节", "chinese new year", "cny",
+    "中秋", "moon cake", "mooncake",
+    "国庆",
+
+    # 中文谐音梗
+    "六六六", "666", "八八八", "888",
+    "发财", "facai",
+    "牛逼", "niubi",
+
+    # 亚洲 meme 文化
+    "草泥马", "alpaca",
+    "doge", "柴犬",
+    "奥特曼", "ultraman",
+    "高达", "gundam",
+]
+
 # ── Reddit 重点监控子版块 ────────────────────────────────
 REDDIT_SUBREDDITS = [
     "memes",                 # 最大 meme 子版
@@ -71,10 +127,12 @@ REDDIT_SUBREDDITS = [
     "memecoin",              # meme coin 讨论
     "TikTokCringe",          # TikTok 热点搬运
     "shitposting",           # 梗文化
+    "China_irl",             # 中文社区
+    "chonglangTV",           # 华人梗文化
 ]
 
 # ── 合并所有关键词 ───────────────────────────────────────
-ALL_MEME_KEYWORDS = CLASSIC_MEMES + TRENDING_MEMES
+ALL_MEME_KEYWORDS = CLASSIC_MEMES + TRENDING_MEMES + CHINESE_MEMES
 
 # 预编译正则
 _meme_patterns: list[tuple[re.Pattern, str]] = []
