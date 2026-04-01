@@ -102,12 +102,31 @@ def main():
     parser = argparse.ArgumentParser(description="土狗交易机器人")
     parser.add_argument("--feed-only", action="store_true", help="仅使用 feed 信号源")
     parser.add_argument("--dry-run", action="store_true", help="模拟模式，不实际下单")
+    parser.add_argument("--daemon", action="store_true", help="守护模式，崩溃自动重启")
     args = parser.parse_args()
 
-    try:
-        asyncio.run(run(feed_only=args.feed_only, dry_run=args.dry_run))
-    except KeyboardInterrupt:
-        logger.info("Bot 已停止")
+    if args.daemon:
+        # 守护模式：自己管理自己，无限重启
+        import time
+        import signal
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)  # 忽略 SIGHUP
+
+        while True:
+            logger.info("[DAEMON] Bot 启动...")
+            try:
+                asyncio.run(run(feed_only=args.feed_only, dry_run=args.dry_run))
+            except KeyboardInterrupt:
+                logger.info("[DAEMON] Bot 被手动停止")
+                break
+            except Exception as e:
+                logger.error("[DAEMON] Bot 异常退出: %s", e)
+            logger.info("[DAEMON] 5秒后重启...")
+            time.sleep(5)
+    else:
+        try:
+            asyncio.run(run(feed_only=args.feed_only, dry_run=args.dry_run))
+        except KeyboardInterrupt:
+            logger.info("Bot 已停止")
 
 
 if __name__ == "__main__":
