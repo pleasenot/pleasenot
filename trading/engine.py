@@ -20,6 +20,20 @@ logger = get_logger(__name__)
 # 同一个 CA 在 DEDUP_TTL 秒内不重复处理（跨信号源去重）
 DEDUP_TTL = 300  # 5 分钟
 
+# ── 动态仓位：固定比例 + 信号强度 ──────────────────────────
+POSITION_RATIO = 0.01         # 钱包余额的 1%
+POSITION_MIN_SOL = 0.01       # 最小买入 0.01 SOL
+POSITION_MAX_SOL = 0.1        # 最大买入 0.1 SOL
+# 信号强度加码倍数 {命中信号源数量: 倍数}
+SIGNAL_STRENGTH_MULTIPLIER = {
+    1: 1.0,   # 单信号源：标准仓位
+    2: 1.5,   # 双信号源交叉验证：1.5x
+    3: 2.0,   # 三信号源：2x
+}
+SIGNAL_STRENGTH_MAX_MULTI = 3.0   # 4个以上信号源最高 3x
+# 信号强度窗口：同一个 CA 在多少秒内被多个信号源命中算交叉验证
+SIGNAL_STRENGTH_WINDOW = 300  # 5 分钟
+
 
 @dataclass
 class TradeRecord:
@@ -59,6 +73,8 @@ class TradingEngine:
         self._processing: set[str] = set()  # 正在处理的 CA，防止并发分析同一个币
         self._rejected_cache: set[str] = set()  # 已拒绝的 CA 缓存，避免重复分析
         self._signal_seen: dict[str, float] = {}  # 跨信号源去重 {ca: timestamp}
+        # 信号强度追踪：{ca: {source1, source2, ...}}，记录每个 CA 被哪些信号源命中
+        self._signal_hits: dict[str, dict] = {}  # {ca: {"sources": set, "first_seen": float}}
         self.position_monitor = PositionMonitor()
         self.analyzer = TokenAnalyzer()
         self.safety = SafetyGuard()
@@ -87,11 +103,15 @@ class TradingEngine:
                 self._signal_queue.task_done()
 
     def _cleanup_dedup(self) -> None:
-        """清理过期的去重缓存"""
+        """清理过期的去重缓存和信号强度追踪"""
         now = time.time()
         expired = [ca for ca, ts in self._signal_seen.items() if now - ts > DEDUP_TTL]
         for ca in expired:
             del self._signal_seen[ca]
+        # 清理过期的信号强度记录
+        expired_hits = [ca for ca, h in self._signal_hits.items() if now - h["first_seen"] > SIGNAL_STRENGTH_WINDOW * 2]
+        for ca in expired_hits:
+            del self._signal_hits[ca]
 
     async def handle_signal(self, signal: TradeSignal) -> TradeRecord | None:
         """收到信号后放入队列（非阻塞），由消费者并发处理"""
@@ -101,14 +121,26 @@ class TradingEngine:
 
         is_buy = signal.action == "buy"
 
-        # 快速去重（不需要等队列）
+        # 快速去重 + 信号强度追踪
         if is_buy:
             ca = signal.token_address
+            now = time.time()
+
+            # 记录信号强度（即使去重也要记，用于后续加码）
+            if ca not in self._signal_hits:
+                self._signal_hits[ca] = {"sources": set(), "first_seen": now}
+            hit = self._signal_hits[ca]
+            # 窗口内的信号才算交叉验证
+            if now - hit["first_seen"] <= SIGNAL_STRENGTH_WINDOW:
+                hit["sources"].add(signal.source)
+            else:
+                # 窗口过期，重置
+                self._signal_hits[ca] = {"sources": {signal.source}, "first_seen": now}
+
             # 已在处理中
             if ca in self._processing:
                 return None
             # 跨信号源去重：同一个 CA 5 分钟内只处理一次
-            now = time.time()
             if ca in self._signal_seen and now - self._signal_seen[ca] < DEDUP_TTL:
                 if signal.source != "graveyard_revive":
                     return None
@@ -165,9 +197,7 @@ class TradingEngine:
                 self.reporter.record_signal(signal.source, passed=True, score=analysis.score)
 
         if is_buy:
-            amount = self._calc_buy_amount(analysis.score)
-
-            # ── 安全护栏检查 ──────────────────────────────
+            # ── 查询钱包余额（用于动态仓位计算 + 安全检查）───
             try:
                 wallet_info = await client.wallet_info(self.wallet_address, signal.chain)
                 sol_balance = float(
@@ -178,6 +208,13 @@ class TradingEngine:
             except Exception:
                 sol_balance = 0.0
 
+            # 计算信号强度
+            hit_info = self._signal_hits.get(signal.token_address)
+            signal_count = len(hit_info["sources"]) if hit_info else 1
+
+            amount = self._calc_buy_amount(analysis.score, sol_balance, signal_count)
+
+            # ── 安全护栏检查 ──────────────────────────────
             open_count = len([p for p in self.position_monitor.positions if p.status != "closed"])
             allowed, reason = self.safety.can_buy(amount, sol_balance, open_count)
             if not allowed:
@@ -343,36 +380,37 @@ class TradingEngine:
         (40, 0.5, "探路"),
     ]
 
-    def _calc_buy_amount(self, score: int) -> float:
-        base = self.buy_amount
+    def _calc_buy_amount(self, score: int, sol_balance: float = 0.0, signal_count: int = 1) -> float:
+        # ── 第1层：固定比例基础仓位 ─────────────────────────
+        if sol_balance > 0:
+            base = sol_balance * POSITION_RATIO
+            base = max(POSITION_MIN_SOL, min(POSITION_MAX_SOL, base))
+        else:
+            base = self.buy_amount  # fallback
 
-        # 动态调整1：持仓越多，单笔越小（资金分散保护）
-        open_count = len([p for p in self.position_monitor.positions if p.status != "closed"])
-        if open_count >= 15:
-            base *= 0.5
-        elif open_count >= 10:
-            base *= 0.7
-
-        # 动态调整2：近期连亏则缩仓（回撤保护）
-        recent = self._history[-10:]
-        if len(recent) >= 5:
-            recent_buys = [r for r in recent if r.signal.action == "buy"]
-            if recent_buys:
-                fail_rate = sum(1 for r in recent_buys if r.status == "failed") / len(recent_buys)
-                if fail_rate >= 0.6:
-                    base *= 0.5
-                    logger.info("动态缩仓: 近期失败率%.0f%%，仓位减半", fail_rate * 100)
-
-        # 分档投入
+        # ── 第2层：评分分档倍数 ─────────────────────────────
+        tier_multi = 1.0
         for min_score, multiplier, tier_name in self.TIERS:
             if score >= min_score:
-                amount = base * multiplier
-                logger.info(
-                    "分档投入: score=%d tier=%s multiplier=%.1fx amount=%.3f (base=%.3f)",
-                    score, tier_name, multiplier, amount, base,
-                )
-                return amount
-        return base
+                tier_multi = multiplier
+                break
+
+        # ── 第3层：信号强度加码 ─────────────────────────────
+        signal_multi = SIGNAL_STRENGTH_MULTIPLIER.get(
+            signal_count,
+            SIGNAL_STRENGTH_MAX_MULTI if signal_count > 3 else 1.0,
+        )
+
+        amount = base * tier_multi * signal_multi
+
+        # 最终下限保护（上限由 safety.py 的 MAX_SINGLE_BUY_SOL 兜底）
+        amount = max(POSITION_MIN_SOL, amount)
+
+        logger.info(
+            "动态仓位: balance=%.3f base=%.4f × tier=%.1f(score=%d) × signal=%.1f(%d源) → %.4f SOL",
+            sol_balance, base, tier_multi, score, signal_multi, signal_count, amount,
+        )
+        return amount
 
     def _get_tier_name(self, score: int) -> str:
         for min_score, _, tier_name in self.TIERS:

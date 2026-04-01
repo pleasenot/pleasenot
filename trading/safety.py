@@ -21,6 +21,12 @@ FAILURE_COOLDOWN_SECONDS = 120     # 失败冷却 2 分钟（快速恢复）
 MIN_SOL_BALANCE = 0.3             # 余额低于 0.3 SOL 停止买入
 MAX_SINGLE_BUY_SOL = 0.1          # 单笔最大投入 0.1 SOL（严控单笔风险）
 
+# ── 连续亏损冷却期 ─────────────────────────────────────────
+# 连续 N 笔卖出都是亏损（multiplier < 1.0）→ 暂停买入一段时间
+# 和 FAILURE_COOLDOWN 不同：failure 是交易执行失败，loss 是卖出亏损
+CONSECUTIVE_LOSS_THRESHOLD = 5     # 连续 5 笔亏损卖出触发冷却
+LOSS_COOLDOWN_SECONDS = 600        # 冷却 10 分钟（市场可能整体不行，等等再说）
+
 
 class SafetyGuard:
     """资金安全护栏"""
@@ -33,6 +39,10 @@ class SafetyGuard:
         self._paused = False
         self._pause_reason = ""
         self._day_start = time.time()
+        # 连续亏损冷却
+        self._consecutive_losses = 0    # 连续亏损卖出次数
+        self._last_loss_time = 0.0
+        self._loss_cooldown_active = False
 
     def can_buy(self, amount: float, sol_balance: float, open_positions: int) -> tuple[bool, str]:
         """
@@ -77,6 +87,23 @@ class SafetyGuard:
                 # 冷却结束，重置
                 self._consecutive_failures = 0
 
+        # 8. 连续亏损冷却（市场不行就停手）
+        if self._consecutive_losses >= CONSECUTIVE_LOSS_THRESHOLD:
+            elapsed = time.time() - self._last_loss_time
+            if elapsed < LOSS_COOLDOWN_SECONDS:
+                remaining = int(LOSS_COOLDOWN_SECONDS - elapsed)
+                if not self._loss_cooldown_active:
+                    self._loss_cooldown_active = True
+                    logger.warning(
+                        "🧊 连续%d笔亏损卖出，进入%d秒冷却期（市场可能整体不行）",
+                        self._consecutive_losses, LOSS_COOLDOWN_SECONDS,
+                    )
+                return False, f"连续{self._consecutive_losses}笔亏损，冷却中({remaining}s)"
+            else:
+                logger.info("🧊 亏损冷却期结束，恢复买入")
+                self._consecutive_losses = 0
+                self._loss_cooldown_active = False
+
         return True, "ok"
 
     def record_buy(self, amount: float) -> None:
@@ -101,9 +128,21 @@ class SafetyGuard:
     def record_loss(self, loss_sol: float) -> None:
         """记录亏损金额"""
         self._daily_loss += loss_sol
-        logger.warning("安全统计: 今日亏损+%.3f (累计%.3f SOL)", loss_sol, self._daily_loss)
+        self._consecutive_losses += 1
+        self._last_loss_time = time.time()
+        logger.warning(
+            "安全统计: 今日亏损+%.3f (累计%.3f SOL) 连续亏损:%d笔",
+            loss_sol, self._daily_loss, self._consecutive_losses,
+        )
         if self._daily_loss >= MAX_DAILY_LOSS_SOL:
             logger.warning("🛑 今日亏损已达上限 %.3f SOL，暂停买入", self._daily_loss)
+
+    def record_profit(self) -> None:
+        """记录一笔盈利卖出，重置连续亏损计数"""
+        if self._consecutive_losses > 0:
+            logger.info("连续亏损计数重置（盈利卖出）之前连续亏损:%d笔", self._consecutive_losses)
+        self._consecutive_losses = 0
+        self._loss_cooldown_active = False
 
     def pause(self, reason: str) -> None:
         self._paused = True
