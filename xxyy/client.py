@@ -23,6 +23,102 @@ class XxyyAPIError(Exception):
         super().__init__(f"[{code}] {msg}")
 
 
+class APIHealthMonitor:
+    """API 健康监测：追踪成功/失败，连续失败告警"""
+
+    ALERT_THRESHOLD = 5          # 连续失败 5 次触发告警
+    RECOVERY_LOG_INTERVAL = 1    # 恢复后立即通知
+    STATUS_FILE = "api_health.json"
+
+    def __init__(self):
+        self._consecutive_failures = 0
+        self._total_success = 0
+        self._total_failures = 0
+        self._last_success_time = time.time()
+        self._last_failure_time = 0.0
+        self._alerted = False        # 已发过告警（避免重复刷日志）
+        self._downtime_start = 0.0   # 本次宕机开始时间
+
+    def record_success(self) -> None:
+        self._total_success += 1
+        was_down = self._consecutive_failures >= self.ALERT_THRESHOLD
+        self._consecutive_failures = 0
+        self._last_success_time = time.time()
+
+        if was_down and self._alerted:
+            downtime = time.time() - self._downtime_start
+            logger.info(
+                "🟢 API 恢复正常！宕机时长: %.0f秒 (%.1f分钟)",
+                downtime, downtime / 60,
+            )
+            self._alerted = False
+            self._downtime_start = 0.0
+            self._save_status()
+
+    def record_failure(self, error: str = "") -> None:
+        self._consecutive_failures += 1
+        self._total_failures += 1
+        self._last_failure_time = time.time()
+
+        if self._consecutive_failures == self.ALERT_THRESHOLD:
+            self._downtime_start = time.time()
+            self._alerted = True
+            logger.error(
+                "🔴🔴🔴 API 连续失败 %d 次！止盈/止损可能失效！最近错误: %s",
+                self._consecutive_failures, error,
+            )
+            self._save_status()
+        elif self._alerted and self._consecutive_failures % 10 == 0:
+            # 每 10 次失败再提醒一次
+            downtime = time.time() - self._downtime_start
+            logger.error(
+                "🔴 API 持续异常，已连续失败 %d 次 (%.0f秒)，止盈/止损失效中！",
+                self._consecutive_failures, downtime,
+            )
+            self._save_status()
+
+    @property
+    def is_healthy(self) -> bool:
+        return self._consecutive_failures < self.ALERT_THRESHOLD
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+    def status(self) -> str:
+        if self.is_healthy:
+            return f"🟢 健康 (成功:{self._total_success} 失败:{self._total_failures})"
+        downtime = time.time() - self._downtime_start if self._downtime_start else 0
+        return (
+            f"🔴 异常 连续失败:{self._consecutive_failures} "
+            f"宕机:{downtime:.0f}秒 "
+            f"(总成功:{self._total_success} 总失败:{self._total_failures})"
+        )
+
+    def _save_status(self) -> None:
+        """写入状态文件，方便外部监控"""
+        import json, os
+        status = {
+            "healthy": self.is_healthy,
+            "consecutive_failures": self._consecutive_failures,
+            "total_success": self._total_success,
+            "total_failures": self._total_failures,
+            "last_success": self._last_success_time,
+            "last_failure": self._last_failure_time,
+            "downtime_start": self._downtime_start,
+        }
+        try:
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), self.STATUS_FILE)
+            with open(path, "w") as f:
+                json.dump(status, f, indent=2)
+        except Exception:
+            pass
+
+
+# 全局健康监测实例
+api_health = APIHealthMonitor()
+
+
 class XxyyClient:
     def __init__(self):
         self._client = httpx.AsyncClient(
@@ -87,18 +183,29 @@ class XxyyClient:
         return resp  # 最后一次的响应
 
     async def _get(self, path: str, **params) -> Any:
-        resp = await self._request_with_retry("GET", f"{PREFIX}{path}", params=params)
+        try:
+            resp = await self._request_with_retry("GET", f"{PREFIX}{path}", params=params)
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            api_health.record_failure(f"网络异常: {e}")
+            raise
         return self._parse(resp)
 
     async def _post(self, path: str, body: dict) -> Any:
-        resp = await self._request_with_retry("POST", f"{PREFIX}{path}", json=body)
+        try:
+            resp = await self._request_with_retry("POST", f"{PREFIX}{path}", json=body)
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
+            api_health.record_failure(f"网络异常: {e}")
+            raise
         return self._parse(resp)
 
     def _parse(self, resp: httpx.Response) -> Any:
         resp.raise_for_status()
         data = resp.json()
         if data.get("code") != 200:
-            raise XxyyAPIError(data.get("code", -1), data.get("msg", "unknown error"))
+            error = XxyyAPIError(data.get("code", -1), data.get("msg", "unknown error"))
+            api_health.record_failure(str(error))
+            raise error
+        api_health.record_success()
         return data.get("data")
 
     # ── 基础 ──────────────────────────────────────────────

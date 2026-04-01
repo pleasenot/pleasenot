@@ -8,3 +8,4 @@ positions.json
 trade_signals.log
 bot_daemon.log
 bot_daemon_out.log
+api_health.json

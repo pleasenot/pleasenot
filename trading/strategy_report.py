@@ -209,6 +209,10 @@ class StrategyReporter:
             lines.append("")
             lines.append(f"【安全护栏】{self._engine.safety.status()}")
 
+        # ── 9. API 健康状态 ──────────────────────────────
+        from xxyy.client import api_health
+        lines.append(f"【API 健康】{api_health.status()}")
+
         lines.append("")
         lines.append("=" * 70)
 
