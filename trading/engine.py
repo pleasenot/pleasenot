@@ -70,7 +70,7 @@ class TradingEngine:
         self._history: list[TradeRecord] = []
         self._swap_lock = asyncio.Semaphore(1)  # 同一时间只允许一笔 swap（买入+卖出共享）
         self._analysis_sem = asyncio.Semaphore(self.CONCURRENT_ANALYSES)  # 并发分析限制
-        self._signal_queue: asyncio.Queue = asyncio.Queue()
+        self._signal_queue: asyncio.Queue = asyncio.Queue(maxsize=10)  # 限制队列，防止积压过多
         self._processing: set[str] = set()  # 正在处理的 CA，防止并发分析同一个币
         self._rejected_cache: set[str] = set()  # 已拒绝的 CA 缓存，避免重复分析
         self._signal_seen: dict[str, float] = {}  # 跨信号源去重 {ca: timestamp}
@@ -174,8 +174,13 @@ class TradingEngine:
             signal.action, signal.token_address, signal.chain, signal.source,
         )
 
-        # 放入队列
-        await self._signal_queue.put(signal)
+        # 放入队列（满了就丢弃，meme 币时效性强，积压的不值钱）
+        try:
+            self._signal_queue.put_nowait(signal)
+        except asyncio.QueueFull:
+            self._processing.discard(signal.token_address)
+            logger.debug("信号队列已满，丢弃 ca=%s", signal.token_address)
+            return None
 
         # 定期清理各类缓存
         if len(self._signal_seen) > 200 or len(self._rejected_cache) > 500:

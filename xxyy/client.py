@@ -321,8 +321,6 @@ class XxyyClient:
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             api_health.record_failure(f"swap 网络异常: {e}")
             raise
-        # DEBUG: 打印 swap 原始返回
-        logger.info("swap raw response: HTTP=%d body=%s", resp.status_code, resp.text[:200])
         result = self._parse(resp)
         if isinstance(result, dict):
             tx_id = result.get("signature") or result.get("txId")
