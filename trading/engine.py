@@ -96,8 +96,7 @@ class TradingEngine:
                 await self._process_signal(signal)
             except Exception as e:
                 logger.error("信号处理异常 ca=%s: %s", signal.token_address, e)
-                # 处理失败，清除去重缓存让信号可以重试
-                self._signal_seen.pop(signal.token_address, None)
+                # 不清除 _signal_seen，让 TTL 自然过期（防止异常币不断重试）
             finally:
                 self._processing.discard(signal.token_address)
                 self._signal_queue.task_done()
@@ -176,6 +175,7 @@ class TradingEngine:
             self._signal_queue.put_nowait(signal)
         except asyncio.QueueFull:
             self._processing.discard(signal.token_address)
+            self._signal_seen.pop(signal.token_address, None)  # 清除去重，让下次可以重新进入
             logger.debug("信号队列已满，丢弃 ca=%s", signal.token_address)
             return None
 
