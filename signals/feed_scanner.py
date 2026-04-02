@@ -4,7 +4,7 @@ from typing import Callable
 
 from signals.base import BaseSignalSource, TradeSignal, TTLSet
 from signals.ai_keywords import is_ai_related
-from xxyy.client import client
+from xxyy.client import scanner_client as client
 from config import config
 from utils.logger import get_logger
 

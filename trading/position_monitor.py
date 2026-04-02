@@ -14,7 +14,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from xxyy.client import client, XxyyAPIError
+from xxyy.client import monitor_client as client, XxyyAPIError
 from llm.minimax_client import minimax
 from trading.holding_analyzer import holding_analyzer
 from config import config

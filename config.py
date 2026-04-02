@@ -7,8 +7,12 @@ load_dotenv()
 
 @dataclass
 class Config:
-    # XXYY API
+    # XXYY API（多 key 分流，每个 key 独立 1QPS）
     api_key: str = field(default_factory=lambda: os.environ["XXYY_API_KEY"])
+    api_key_swap: str = field(default_factory=lambda: os.getenv("XXYY_API_KEY_SWAP", ""))
+    api_key_scanner: str = field(default_factory=lambda: os.getenv("XXYY_API_KEY_SCANNER", ""))
+    api_key_analyzer: str = field(default_factory=lambda: os.getenv("XXYY_API_KEY_ANALYZER", ""))
+    api_key_monitor: str = field(default_factory=lambda: os.getenv("XXYY_API_KEY_MONITOR", ""))
     api_base_url: str = field(default_factory=lambda: os.getenv("XXYY_API_BASE_URL", "https://www.xxyy.io"))
 
     # 默认交易链

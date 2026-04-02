@@ -121,21 +121,26 @@ api_health = APIHealthMonitor()
 
 class XxyyClient:
     def __init__(self):
+        # 多 key 分流：每个 key 独立 1QPS，swap 永远不被查询挤占
         self._client = httpx.AsyncClient(
             base_url=BASE,
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=30.0,
         )
-        # swap 专用客户端（独立连接，不被查询请求堵塞）
+        # swap 专用 key（最重要，独立配额）
+        swap_key = config.api_key_swap or config.api_key
         self._swap_client = httpx.AsyncClient(
             base_url=BASE,
-            headers={"Authorization": f"Bearer {config.api_key}"},
+            headers={"Authorization": f"Bearer {swap_key}"},
             timeout=30.0,
         )
-        # 全局请求节流：避免并发请求触发 429
+        # 全局请求节流（默认 key 用）
         self._throttle = asyncio.Semaphore(1)
-        self._min_interval = 1.5  # 最小请求间隔（秒），官方限制 1 QPS，留足余量防 429
+        self._min_interval = 1.5
         self._last_request = 0.0
+        # swap 独立节流
+        self._swap_throttle = asyncio.Semaphore(1)
+        self._last_swap = 0.0
         # 查询结果缓存
         self._cache: dict[str, tuple[float, Any]] = {}
         self._max_cache = 200
@@ -298,12 +303,17 @@ class XxyyClient:
         }
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
-        # swap 走全局节流（和查询共享 1QPS 配额，XXYY 按 API key 限流）
-        # 额外等 2 秒确保前面的查询请求已处理完毕
-        await asyncio.sleep(2)
-        await self._wait_throttle()
+        # swap 用独立 key + 独立节流（不和查询共享 1QPS 配额）
+        while True:
+            async with self._swap_throttle:
+                now = time.monotonic()
+                wait = 1.5 - (now - self._last_swap)
+                if wait <= 0:
+                    self._last_swap = time.monotonic()
+                    break
+            await asyncio.sleep(wait)
         try:
-            resp = await self._client.post(f"{PREFIX}/swap", json=body)
+            resp = await self._swap_client.post(f"{PREFIX}/swap", json=body)
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             api_health.record_failure(f"swap 网络异常: {e}")
             raise
@@ -445,5 +455,21 @@ class XxyyClient:
         return []
 
 
-# 全局单例
+# 全局单例（默认 key）
 client = XxyyClient()
+
+# 专用客户端：scanner 和 analyzer 用独立 key（如果配置了）
+def _make_client_with_key(key: str) -> XxyyClient:
+    """创建使用指定 key 的客户端"""
+    c = XxyyClient()
+    if key:
+        c._client = httpx.AsyncClient(
+            base_url=BASE,
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=30.0,
+        )
+    return c
+
+scanner_client = _make_client_with_key(config.api_key_scanner) if config.api_key_scanner else client
+analyzer_client = _make_client_with_key(config.api_key_analyzer) if config.api_key_analyzer else client
+monitor_client = _make_client_with_key(config.api_key_monitor) if config.api_key_monitor else client

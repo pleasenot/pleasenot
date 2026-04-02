@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from xxyy.client import client
+from xxyy.client import analyzer_client as client
 from llm.minimax_client import minimax
 from config import config
 from utils.logger import get_logger
