@@ -258,6 +258,7 @@ class PositionMonitor:
         # 不用 XXYY query_token 的 USD 价格做 fallback（单位不同会导致错误止损）
         current_price = await self._get_dexscreener_price_sol(pos.token_address)
         if current_price <= 0:
+            logger.debug("DexScreener 查不到 SOL 价格 ca=%s，跳过本轮", pos.token_address[:12])
             return  # DexScreener 查不到就跳过本轮，不用 USD 价格混入
 
         # query_token 仍用于获取 trade_info（成交量、持仓人等非价格数据）
@@ -274,6 +275,11 @@ class PositionMonitor:
             return
 
         multiplier = current_price / pos.entry_price
+
+        # 重要：打印每个持仓的实际 multiplier（方便排查止盈不触发问题）
+        if multiplier >= 1.5 or multiplier <= 0.6:
+            logger.info("📊 ca=%s price=%.12f entry=%.12f x=%.2f tp=%d",
+                       pos.token_address[:12], current_price, pos.entry_price, multiplier, pos.tp_level)
 
         # 记录初始动量数据
         if not pos.volume_recorded:
