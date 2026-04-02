@@ -127,18 +127,19 @@ class XxyyClient:
             headers={"Authorization": f"Bearer {config.api_key}"},
             timeout=30.0,
         )
-        # swap 专用 key（最重要，独立配额）
-        swap_key = config.api_key_swap or config.api_key
-        self._swap_client = httpx.AsyncClient(
-            base_url=BASE,
-            headers={"Authorization": f"Bearer {swap_key}"},
-            timeout=30.0,
-        )
+        # swap 双 key 轮换（2QPS swap 配额）
+        swap_key1 = config.api_key_swap or config.api_key
+        swap_key2 = config.api_key_swap2 or swap_key1
+        self._swap_clients = [
+            httpx.AsyncClient(base_url=BASE, headers={"Authorization": f"Bearer {swap_key1}"}, timeout=30.0),
+            httpx.AsyncClient(base_url=BASE, headers={"Authorization": f"Bearer {swap_key2}"}, timeout=30.0),
+        ]
+        self._swap_idx = 0  # 轮换索引
         # 全局请求节流（默认 key 用）
         self._throttle = asyncio.Semaphore(1)
         self._min_interval = 1.5
         self._last_request = 0.0
-        # swap 独立节流
+        # swap 节流（双 key 轮换，间隔可以缩短到 1 秒）
         self._swap_throttle = asyncio.Semaphore(1)
         self._last_swap = 0.0
         # 查询结果缓存
@@ -147,7 +148,8 @@ class XxyyClient:
 
     async def close(self):
         await self._client.aclose()
-        await self._swap_client.aclose()
+        for sc in self._swap_clients:
+            await sc.aclose()
 
     async def _wait_throttle(self) -> None:
         """全局请求节流（不持锁 sleep，避免阻塞所有并发请求）"""
@@ -303,17 +305,19 @@ class XxyyClient:
         }
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
-        # swap 用独立 key + 独立节流（不和查询共享 1QPS 配额）
+        # swap 双 key 轮换（每个 key 1QPS，轮换 = 2QPS）
         while True:
             async with self._swap_throttle:
                 now = time.monotonic()
-                wait = 2.0 - (now - self._last_swap)
+                wait = 1.0 - (now - self._last_swap)  # 双 key 轮换，1 秒间隔够了
                 if wait <= 0:
                     self._last_swap = time.monotonic()
                     break
             await asyncio.sleep(wait)
+        swap_client = self._swap_clients[self._swap_idx % len(self._swap_clients)]
+        self._swap_idx += 1
         try:
-            resp = await self._swap_client.post(f"{PREFIX}/swap", json=body)
+            resp = await swap_client.post(f"{PREFIX}/swap", json=body)
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             api_health.record_failure(f"swap 网络异常: {e}")
             raise
