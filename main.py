@@ -90,7 +90,7 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         chain=config.default_chain, feed_type="COMPLETED",
         filters=TIER_C_FILTERS, ai_only=False, interval=60, max_signals_per_cycle=2,
     )
-    tasks.append(asyncio.create_task(feed_dexpaid.start(handle)))
+    tasks.append(asyncio.create_task(feed_completed.start(handle)))
 
     # AI 热点信号源（提高每轮信号数）
     ai_trending = AiTrendingScanner(chain=config.default_chain, max_signals_per_cycle=2)
