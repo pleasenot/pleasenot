@@ -125,6 +125,7 @@ _swap_pause.set()  # 默认不暂停
 
 class XxyyClient:
     def __init__(self):
+        self._skip_swap_pause = False  # 有独立 key 的 client 跳过 swap 暂停
         # 多 key 分流：每个 key 独立 1QPS，swap 永远不被查询挤占
         self._client = httpx.AsyncClient(
             base_url=BASE,
@@ -156,8 +157,9 @@ class XxyyClient:
             await sc.aclose()
 
     async def _wait_throttle(self) -> None:
-        """全局请求节流（swap 执行时暂停）"""
-        await _swap_pause.wait()  # swap 执行中时阻塞所有查询请求
+        """全局请求节流"""
+        if not self._skip_swap_pause:
+            await _swap_pause.wait()  # 只阻塞共享 key 的 client
         while True:
             async with self._throttle:
                 now = time.monotonic()
@@ -465,7 +467,7 @@ client = XxyyClient()
 
 # 专用客户端：scanner 和 analyzer 用独立 key（如果配置了）
 def _make_client_with_key(key: str) -> XxyyClient:
-    """创建使用指定 key 的客户端"""
+    """创建使用指定 key 的客户端（有独立 key 不受 swap 暂停影响）"""
     c = XxyyClient()
     if key:
         c._client = httpx.AsyncClient(
@@ -473,6 +475,7 @@ def _make_client_with_key(key: str) -> XxyyClient:
             headers={"Authorization": f"Bearer {key}"},
             timeout=30.0,
         )
+        c._skip_swap_pause = True  # 独立 key，不受 swap 暂停影响
     return c
 
 scanner_client = _make_client_with_key(config.api_key_scanner) if config.api_key_scanner else client

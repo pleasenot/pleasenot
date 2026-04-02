@@ -333,6 +333,10 @@ class TradingEngine:
                 quote_amount = float(record.result.get("quoteAmount", 0) or 0)  # 代币数量
                 if base_amount > 0 and quote_amount > 0:
                     entry_price = base_amount / quote_amount  # SOL/token
+                    # sanity check: meme 币入场价应该很小 (< 0.01 SOL/token)
+                    if entry_price > 1.0:
+                        logger.warning("入场价异常偏高 %.6f，base/quote 可能反了", entry_price)
+                        entry_price = quote_amount / base_amount  # 尝试反转
                     logger.info("入场价(SOL计): %.12f SOL/token (花费%.4f SOL 获得%.0f个)",
                                 entry_price, base_amount, quote_amount)
 
