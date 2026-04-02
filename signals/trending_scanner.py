@@ -99,6 +99,18 @@ class TrendingScanner(BaseSignalSource):
                     mc = float(token.get("marketCapUSD", 0) or 0)
                     holders = token.get("holders", 0)
                     volume = float(token.get("volume", 0) or 0)
+
+                    # Skill 新增数据：smartWallets + auditInfo
+                    smart_wallets = token.get("smartWallets") or {}
+                    smart_count = smart_wallets.get("total", 0)
+                    audit = token.get("auditInfo") or {}
+                    bundle_hp = audit.get("bundleHp", 0)
+                    sniper_count = audit.get("snipers", 0)
+
+                    # 额外过滤：bundleHp 过高说明批量操控
+                    if bundle_hp > 30:
+                        logger.debug("trending skip ca=%s bundleHp=%d", ca[:12], bundle_hp)
+                        continue
                     buy_count = token.get("buyCount", 0)
                     sell_count = token.get("sellCount", 0)
 
@@ -114,7 +126,7 @@ class TrendingScanner(BaseSignalSource):
                         token_address=ca,
                         action="buy",
                         source="trending",
-                        reason=f"热门{self.period} {symbol} mc=${mc:.0f} vol=${volume:.0f} B/S={bs_ratio:.1f}",
+                        reason=f"热门{self.period} {symbol} mc=${mc:.0f} vol=${volume:.0f} B/S={bs_ratio:.1f} SM={smart_count}",
                     )
                     if asyncio.iscoroutinefunction(on_signal):
                         await on_signal(signal)

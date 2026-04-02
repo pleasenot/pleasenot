@@ -11,7 +11,7 @@ import argparse
 
 from config import config
 from xxyy.client import client
-from signals.feed_scanner import FeedScanner, SMART_FILTERS, DEXPAID_FILTERS
+from signals.feed_scanner import FeedScanner, SMART_FILTERS, TIER_A_FILTERS, TIER_B_FILTERS, TIER_C_FILTERS
 from signals.ai_trending_scanner import AiTrendingScanner
 from signals.twitter_scanner import TwitterScanner
 from signals.social_trend_scanner import SocialTrendScanner
@@ -64,24 +64,31 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
 
     tasks = []
 
-    # Feed 扫描（SOL 新币，不限 AI，每轮最多 3 个信号）
+    # Tier A: 新币打新（1-70分钟内，核心策略）
     feed = FeedScanner(
         chain=config.default_chain, feed_type="NEW",
-        ai_only=False, interval=30, max_signals_per_cycle=3,
+        filters=TIER_A_FILTERS, ai_only=False, interval=30, max_signals_per_cycle=3,
     )
     tasks.append(asyncio.create_task(feed.start(handle)))
 
-    # Feed 扫描（有 KOL 买入的新币，条件更宽松，每轮最多 2 个）
+    # KOL 买入的新币（条件放宽，KOL 背书）
     feed_kol = FeedScanner(
         chain=config.default_chain, feed_type="NEW",
         filters=SMART_FILTERS, ai_only=False, interval=45, max_signals_per_cycle=2,
     )
     tasks.append(asyncio.create_task(feed_kol.start(handle)))
 
-    # Feed 扫描（DexScreener 付费推广的币，有运营意愿）
-    feed_dexpaid = FeedScanner(
+    # Tier B: 即将毕业币（DexScreener 付费推广，1-120分钟内）
+    feed_almost = FeedScanner(
+        chain=config.default_chain, feed_type="ALMOST",
+        filters=TIER_B_FILTERS, ai_only=False, interval=45, max_signals_per_cycle=2,
+    )
+    tasks.append(asyncio.create_task(feed_almost.start(handle)))
+
+    # Tier C: 毕业币（高质量，300+持仓人，$20k-$160k）
+    feed_completed = FeedScanner(
         chain=config.default_chain, feed_type="COMPLETED",
-        filters=DEXPAID_FILTERS, ai_only=False, interval=60, max_signals_per_cycle=2,
+        filters=TIER_C_FILTERS, ai_only=False, interval=60, max_signals_per_cycle=2,
     )
     tasks.append(asyncio.create_task(feed_dexpaid.start(handle)))
 
@@ -131,13 +138,6 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
         # 交易复盘（每小时分析历史交易，AI 深度分析每3小时一次）
         retrospective = TradeRetrospective(engine=engine)
         tasks.append(asyncio.create_task(retrospective.start()))
-
-    # ALMOST 币扫描（即将完成 bonding curve，毕业前最后机会）
-    feed_almost = FeedScanner(
-        chain=config.default_chain, feed_type="ALMOST",
-        ai_only=False, interval=45, max_signals_per_cycle=2,
-    )
-    tasks.append(asyncio.create_task(feed_almost.start(handle)))
 
     # Meme 趋势扫描（Reddit / TikTok / 链上匹配）
     meme_scanner = SocialTrendScanner(chain=config.default_chain, feed_interval=60)

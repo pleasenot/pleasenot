@@ -10,33 +10,49 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 默认安全过滤条件
-DEFAULT_FILTERS = {
-    "holder": "5,",         # 最少 5 个持仓人（降低门槛，让早期币进来）
-    "mc": "2000,",          # 最低市值 2000 USD（从 5000 降到 2000）
-    "insiderHp": ",20",     # 内部人持仓 < 20%（稍微放宽）
-    "snipers": ",10",       # 狙击者数量 < 10
-    "bundleHp": ",30",      # Bundle 持仓 < 30%（防批量操控）
-    "newWalletHp": ",30",   # 新钱包持仓 < 30%（防 sybil 攻击）
+# ── Skill 策略：三层过滤，精准打新 ──────────────────────────
+
+# Tier A: 新币（1-70分钟内创建，最核心的打新策略）
+TIER_A_FILTERS = {
+    "topHp": "22,40",       # top10 持仓 22-40%（太低=无人关注，太高=庄控）
+    "snipers": ",6",        # 狙击者 < 6（少狙击者=更健康）
+    "insiderHp": ",8",      # 内部人持仓 < 8%（严格）
+    "holder": "10,",        # 持仓人 ≥ 10
+    "mc": "8000,",          # 市值 ≥ $8k（太小的不稳定）
+    "oneLink": 1,           # 至少一个社交链接（有运营意愿）
+    "createTime": "1,70",   # 创建 1-70 分钟内（关键！只买新币）
+    "bundleHp": ",30",      # Bundle 持仓 < 30%
+    "newWalletHp": ",30",   # 新钱包持仓 < 30%
 }
 
-# 高质量过滤条件（有 KOL 或聪明钱买入的币，条件可以放宽）
+# Tier B: 即将毕业币（有 DexScreener 付费推广，创建 1-120 分钟）
+TIER_B_FILTERS = {
+    "createTime": "1,120",  # 创建 1-120 分钟内
+    "dexPay": 1,            # DexScreener 付费推广
+    "mc": "13000,",         # 市值 ≥ $13k
+}
+
+# Tier C: 毕业币（质量更高，门槛更高）
+TIER_C_FILTERS = {
+    "createTime": "1,240",  # 创建 4 小时内
+    "topHp": "18,",         # top10 持仓 ≥ 18%（有大户关注）
+    "holder": "300,",       # 持仓人 ≥ 300（社区基础）
+    "mc": "20000,160000",   # 市值 $20k-$160k（毕业后的甜区）
+}
+
+# KOL 买入的新币（条件放宽，KOL 背书）
 SMART_FILTERS = {
     "holder": "3,",
     "mc": "1000,",
     "kol": "1,",            # 至少 1 个 KOL 买入
     "insiderHp": ",25",
     "snipers": ",15",
+    "createTime": "1,120",  # 2 小时内
 }
 
-# DexScreener 付费推广过滤（付费推广的币至少有运营意愿）
-DEXPAID_FILTERS = {
-    "holder": "5,",
-    "mc": "2000,",
-    "dexPay": 1,            # 仅 DexScreener 付费推广的币
-    "insiderHp": ",20",
-    "snipers": ",10",
-}
+# 兼容旧代码
+DEFAULT_FILTERS = TIER_A_FILTERS
+DEXPAID_FILTERS = TIER_B_FILTERS
 
 
 class FeedScanner(BaseSignalSource):

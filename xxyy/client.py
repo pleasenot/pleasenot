@@ -433,6 +433,13 @@ class XxyyClient:
         result = await self._post(f"/trending-list?chain={chain}", {"period": period})
         return result if isinstance(result, list) else []
 
+    # ── Label List（AGENT_KOL 等标签代币）────────────────
+
+    async def label_list(self, chain: str = "sol", label_type: str = "AGENT_KOL") -> list[dict]:
+        """获取特定标签的代币列表"""
+        result = await self._get("/label-list", chain=chain, labelType=label_type)
+        return result if isinstance(result, list) else []
+
     # ── Feed 扫描 ─────────────────────────────────────────
 
     async def feed(
