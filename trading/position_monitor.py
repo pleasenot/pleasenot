@@ -61,7 +61,7 @@ DEAD_COIN_VOLUME = 30           # 1h 成交量低于 $30
 # ── AI 持仓分析 ──────────────────────────────────────────
 AI_ANALYSIS_INTERVAL = 1800     # 每 30 分钟做一次 AI 分析（从20min放宽，减少误杀）
 AI_SELL_CONFIDENCE = 92         # AI 说 SELL 且 confidence >= 92 才执行（从85提高，减少误杀）
-AI_FIRST_ANALYSIS_DELAY = 1800  # 买入后 30 分钟才做第一次 AI 分析（从15min延长，给足发酵时间）
+AI_FIRST_ANALYSIS_DELAY = 300   # 买入后 5 分钟做第一次 AI 分析（先买后分析策略）
 
 # ── 链上同步 ────────────────────────────────────────────
 ONCHAIN_SYNC_INTERVAL = 120     # 每 2 分钟同步一次链上持仓
