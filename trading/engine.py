@@ -49,10 +49,7 @@ class TradeRecord:
 
 class TradingEngine:
     # ── 并发分析参数 ─────────────────────────────────────────
-    # ── 重试参数（8054 多数是临时性错误，重试可成交）──────────
-    BUY_RETRY_MAX = 2
-    BUY_RETRY_DELAY = 5
-    CONCURRENT_ANALYSES = 3     # 最多 3 个信号同时分析
+    CONCURRENT_ANALYSES = 1     # 串行处理：分析快(2秒)+swap快(5秒)=7秒/币，够快了     # 最多 3 个信号同时分析
 
     def __init__(
         self,
@@ -244,67 +241,51 @@ class TradingEngine:
         else:
             amount = float(self.sell_percent)
 
-        # ── 执行 swap（8054 多数是临时性错误，重试一次）──────────
-        max_attempts = self.BUY_RETRY_MAX if is_buy else 1
+        # ── 执行 swap（不重试，让 5s 节流生效，快速跳到下一个新鲜币）──
+        try:
+            async with self._swap_lock:
+                tx_id = await client.swap(
+                    chain=signal.chain,
+                    wallet_address=self.wallet_address,
+                    token_address=signal.token_address,
+                    is_buy=is_buy,
+                    amount=amount,
+                    tip=self.tip,
+                )
+        except (XxyyAPIError, httpx.HTTPStatusError) as e:
+            logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)
+            # 8054 和 429 不计入连续失败冷却
+            is_transient = (isinstance(e, httpx.HTTPStatusError) or
+                           (isinstance(e, XxyyAPIError) and e.code == 8054))
+            if is_buy and not is_transient:
+                self.safety.record_failure()
+            return None
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                async with self._swap_lock:
-                    tx_id = await client.swap(
-                        chain=signal.chain,
-                        wallet_address=self.wallet_address,
-                        token_address=signal.token_address,
-                        is_buy=is_buy,
-                        amount=amount,
-                        tip=self.tip,
-                    )
-            except (XxyyAPIError, httpx.HTTPStatusError) as e:
-                logger.error("swap 失败 ca=%s attempt=%d/%d error=%s",
-                             signal.token_address, attempt, max_attempts, e)
-                if is_buy and attempt < max_attempts:
-                    logger.info("⏳ %d秒后重试 ca=%s", self.BUY_RETRY_DELAY, signal.token_address)
-                    await asyncio.sleep(self.BUY_RETRY_DELAY)
-                    continue
-                # 8054 和 429 不计入连续失败冷却
-                is_transient = (isinstance(e, httpx.HTTPStatusError) or
-                               (isinstance(e, XxyyAPIError) and e.code == 8054))
-                if is_buy and not is_transient:
-                    self.safety.record_failure()
-                return None
+        # swap 提交成功，轮询链上结果
+        result = await self._wait_trade_result(tx_id)
+        status = result.get("status") if isinstance(result, dict) else None
 
-            # swap 提交成功，轮询链上结果
-            result = await self._wait_trade_result(tx_id)
-            status = result.get("status") if isinstance(result, dict) else None
-
-            # 兼容字符串和数字格式的 status
-            if status == 2 or status == "success":
-                record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
-                if is_buy:
-                    record.score = analysis.score
-                    record.tier = self._get_tier_name(analysis.score)
-                record.status = "success"
-                record.result = result
-                self._history.append(record)
-                self._on_trade_done(record)
-                return record
-
-            if (status == 3 or status == "failed") and is_buy and attempt < max_attempts:
-                logger.warning("🔄 链上失败，%d秒后重试 ca=%s", self.BUY_RETRY_DELAY, signal.token_address)
-                await asyncio.sleep(self.BUY_RETRY_DELAY)
-                continue
-
-            # 最终失败
+        if status == 2 or status == "success":
             record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
             if is_buy:
                 record.score = analysis.score
                 record.tier = self._get_tier_name(analysis.score)
-            record.status = "failed" if (status == 3 or status == "failed") else "unknown"
-            record.result = result if isinstance(result, dict) else {}
+            record.status = "success"
+            record.result = result
             self._history.append(record)
             self._on_trade_done(record)
             return record
 
-        return None
+        # 失败
+        record = TradeRecord(signal=signal, tx_id=tx_id, buy_amount=amount)
+        if is_buy:
+            record.score = analysis.score
+            record.tier = self._get_tier_name(analysis.score)
+        record.status = "failed" if (status == 3 or status == "failed") else "unknown"
+        record.result = result if isinstance(result, dict) else {}
+        self._history.append(record)
+        self._on_trade_done(record)
+        return record
 
     async def _wait_trade_result(self, tx_id: str) -> dict:
         """轮询链上交易结果"""
