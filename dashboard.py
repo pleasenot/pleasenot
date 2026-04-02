@@ -23,7 +23,7 @@ from rich.table import Table
 from rich.text import Text
 
 from config import config
-from xxyy.client import client
+from xxyy.client import monitor_client as client
 
 BASE_DIR = Path(__file__).parent
 POSITIONS_FILE = BASE_DIR / "positions.json"

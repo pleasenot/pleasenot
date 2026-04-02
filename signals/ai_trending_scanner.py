@@ -48,6 +48,8 @@ class AiTrendingScanner(BaseSignalSource):
                     symbol = token.get("symbol", "?")
                     name = token.get("name", "?")
                     mc = float(token.get("marketCapUSD", 0) or 0)
+                    if mc > 500_000:
+                        continue
 
                     logger.info(
                         "AI trending signal ca=%s name=%s symbol=%s mc=$%.0f",

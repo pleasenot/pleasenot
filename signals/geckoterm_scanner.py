@@ -125,7 +125,9 @@ class GeckoTermScanner(BaseSignalSource):
         reserve = float(attrs.get("reserve_in_usd", 0) or 0)  # 池子 TVL
         price_change_1h = float(attrs.get("price_change_percentage", {}).get("h1", 0) or 0)
 
-        # 过滤条件：太小/太冷的不要
+        # 过滤条件
+        if mc > 500_000:
+            return None
         if reserve < 1000:
             return None
         if vol_24h < 500 and mc < 3000:
