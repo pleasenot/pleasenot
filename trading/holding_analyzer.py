@@ -197,6 +197,7 @@ class HoldingAnalyzer:
         entry_time: float,
         initial_holders: int,
         initial_volume: float,
+        multiplier_override: float = 0.0,
     ) -> HoldingDiagnosis:
         """
         全面分析一个持仓代币，返回诊断报告。
@@ -290,7 +291,8 @@ class HoldingAnalyzer:
             peers.rank_volume = "高于平均" if volume > peers.avg_volume else "低于平均"
             peers.rank_mc = "高于平均" if mc > peers.avg_market_cap else "低于平均"
 
-        multiplier = current_price / entry_price if entry_price > 0 else 0
+        # 优先用调用方传入的 SOL 计价 multiplier（避免 USD/SOL 单位混乱）
+        multiplier = multiplier_override if multiplier_override > 0 else (current_price / entry_price if entry_price > 0 else 0)
         hold_minutes = (time.time() - entry_time) / 60
 
         return HoldingDiagnosis(
