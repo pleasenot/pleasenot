@@ -254,18 +254,10 @@ class PositionMonitor:
         return 0.0
 
     async def _check_position(self, pos: Position) -> None:
-        # 用 DexScreener SOL 计价价格（和 XXYY P&L 一致）
-        # 不用 XXYY query_token 的 USD 价格做 fallback（单位不同会导致错误止损）
+        # 用 DexScreener SOL 计价价格（快速，不消耗 XXYY 配额）
         current_price = await self._get_dexscreener_price_sol(pos.token_address)
         if current_price <= 0:
-            logger.debug("DexScreener 查不到 SOL 价格 ca=%s，跳过本轮", pos.token_address[:12])
-            return  # DexScreener 查不到就跳过本轮，不用 USD 价格混入
-
-        # query_token 仍用于获取 trade_info（成交量、持仓人等非价格数据）
-        data = await client.query_token(pos.token_address, pos.chain)
-        if not isinstance(data, dict):
-            data = {}
-        trade_info = data.get("tradeInfo") or {}
+            return
 
         # 待定价格补偿
         if pos.entry_price <= 0:
@@ -276,7 +268,7 @@ class PositionMonitor:
 
         multiplier = current_price / pos.entry_price
 
-        # 重要：打印每个持仓的实际 multiplier（方便排查止盈不触发问题）
+        # 重要：打印高倍或低倍持仓
         if multiplier >= 1.5 or multiplier <= 0.6:
             logger.info("📊 ca=%s price=%.12f entry=%.12f x=%.2f tp=%d",
                        pos.token_address[:12], current_price, pos.entry_price, multiplier, pos.tp_level)
@@ -316,16 +308,26 @@ class PositionMonitor:
         # ── 策略3: 时间止损（已禁用，让 AI 和破位止损来管）──
         # await self._check_time_stop(pos, multiplier)
 
-        # ── 策略4: 动量衰退 ──────────────────────────────
-        current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
-        current_holders = int(trade_info.get("holder", 0) or 0)
-        await self._check_momentum(pos, current_volume, current_holders, multiplier)
+        # ── 策略4+5: 破位止损优先（不需要 query_token）──
+        await self._check_crash_stop(pos, multiplier)
 
         if pos.status == "closed":
             return
 
-        # ── 策略5: 破位止损 ──────────────────────────────
-        await self._check_crash_stop(pos, multiplier)
+        # ── 需要 query_token 的策略延后加载（避免拖慢止盈检查）──
+        data = {}
+        trade_info = {}
+        try:
+            data = await client.query_token(pos.token_address, pos.chain)
+            if isinstance(data, dict):
+                trade_info = data.get("tradeInfo") or {}
+        except Exception:
+            pass
+
+        # ── 策略4: 动量衰退 ──────────────────────────────
+        current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
+        current_holders = int(trade_info.get("holder", 0) or 0)
+        await self._check_momentum(pos, current_volume, current_holders, multiplier)
 
         if pos.status == "closed":
             return
