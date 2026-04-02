@@ -307,7 +307,7 @@ class XxyyClient:
         while True:
             async with self._swap_throttle:
                 now = time.monotonic()
-                wait = 1.5 - (now - self._last_swap)
+                wait = 2.0 - (now - self._last_swap)
                 if wait <= 0:
                     self._last_swap = time.monotonic()
                     break
