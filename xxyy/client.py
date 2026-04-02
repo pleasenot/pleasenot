@@ -134,7 +134,7 @@ class XxyyClient:
         )
         # 全局请求节流：避免并发请求触发 429
         self._throttle = asyncio.Semaphore(1)
-        self._min_interval = 1.2  # 最小请求间隔（秒），官方限制 1 QPS，留余量防 429
+        self._min_interval = 1.5  # 最小请求间隔（秒），官方限制 1 QPS，留足余量防 429
         self._last_request = 0.0
         # 查询结果缓存
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -298,14 +298,12 @@ class XxyyClient:
         }
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
-        # swap 用独立客户端，但加最小间隔防 429
-        now = time.monotonic()
-        swap_wait = 1.5 - (now - getattr(self, '_last_swap', 0))
-        if swap_wait > 0:
-            await asyncio.sleep(swap_wait)
-        self._last_swap = time.monotonic()
+        # swap 走全局节流（和查询共享 1QPS 配额，XXYY 按 API key 限流）
+        # 额外等 2 秒确保前面的查询请求已处理完毕
+        await asyncio.sleep(2)
+        await self._wait_throttle()
         try:
-            resp = await self._swap_client.post(f"{PREFIX}/swap", json=body)
+            resp = await self._client.post(f"{PREFIX}/swap", json=body)
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as e:
             api_health.record_failure(f"swap 网络异常: {e}")
             raise
