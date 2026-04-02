@@ -309,7 +309,7 @@ class XxyyClient:
         while True:
             async with self._swap_throttle:
                 now = time.monotonic()
-                wait = 3.0 - (now - self._last_swap)  # swap 间隔 3 秒（XXYY 可能按 wallet 限流）
+                wait = 5.0 - (now - self._last_swap)  # swap 间隔 5 秒（XXYY 按 wallet/IP 限流）
                 if wait <= 0:
                     self._last_swap = time.monotonic()
                     break
