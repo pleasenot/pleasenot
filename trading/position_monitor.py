@@ -307,11 +307,8 @@ class PositionMonitor:
         if pos.status == "closed":
             return
 
-        # ── 策略3: 时间止损 ──────────────────────────────
-        await self._check_time_stop(pos, multiplier)
-
-        if pos.status == "closed":
-            return
+        # ── 策略3: 时间止损（已禁用，让 AI 和破位止损来管）──
+        # await self._check_time_stop(pos, multiplier)
 
         # ── 策略4: 动量衰退 ──────────────────────────────
         current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
