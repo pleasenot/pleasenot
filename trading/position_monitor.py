@@ -273,16 +273,6 @@ class PositionMonitor:
             logger.info("📊 ca=%s price=%.12f entry=%.12f x=%.2f tp=%d",
                        pos.token_address[:12], current_price, pos.entry_price, multiplier, pos.tp_level)
 
-        # 记录初始动量数据
-        if not pos.volume_recorded:
-            vol = float(trade_info.get("hourTradeVolume", 0) or 0)
-            holders = int(trade_info.get("holder", 0) or 0)
-            # API 返回 0 时不标记已记录，下次重试
-            if vol > 0 or holders > 0:
-                pos.initial_volume = vol
-                pos.initial_holders = holders
-                pos.volume_recorded = True
-
         # 更新历史最高价
         if current_price > pos.highest_price:
             pos.highest_price = current_price
@@ -323,6 +313,15 @@ class PositionMonitor:
                 trade_info = data.get("tradeInfo") or {}
         except Exception:
             pass
+
+        # 记录初始动量数据（需要 trade_info）
+        if not pos.volume_recorded:
+            vol = float(trade_info.get("hourTradeVolume", 0) or 0)
+            holders = int(trade_info.get("holder", 0) or 0)
+            if vol > 0 or holders > 0:
+                pos.initial_volume = vol
+                pos.initial_holders = holders
+                pos.volume_recorded = True
 
         # ── 策略4: 动量衰退 ──────────────────────────────
         current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
