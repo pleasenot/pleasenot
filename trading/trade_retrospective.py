@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 from config import config
 from llm.minimax_client import minimax
-from xxyy.client import client
+from xxyy.client import monitor_client as client
 from utils.logger import get_logger
 
 logger = get_logger("retrospective")

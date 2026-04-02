@@ -21,7 +21,7 @@ from signals.celebrity_config import (
     CELEBRITY_ACCOUNTS, CELEBRITY_HANDLES, S_TIER,
     CRYPTO_TRIGGER_WORDS,
 )
-from xxyy.client import client
+from xxyy.client import scanner_client as client
 from config import config
 from utils.logger import get_logger
 

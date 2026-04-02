@@ -14,7 +14,7 @@ import asyncio
 import time
 from collections import defaultdict
 
-from xxyy.client import client
+from xxyy.client import monitor_client as client
 from config import config
 from utils.logger import get_logger
 
