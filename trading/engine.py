@@ -350,18 +350,16 @@ class TradingEngine:
                             )
                             if resp.status_code == 200:
                                 pairs = resp.json().get("pairs") or []
-                                if pairs:
-                                    entry_price = float(pairs[0].get("priceNative", 0) or 0)
+                                sol_mints = {"So11111111111111111111111111111111111111112"}
+                                for p in pairs:
+                                    qt = p.get("quoteToken") or {}
+                                    if qt.get("address") in sol_mints or qt.get("symbol") in ("SOL", "WSOL"):
+                                        entry_price = float(p.get("priceNative", 0) or 0)
+                                        break
                     except Exception:
                         pass
 
-                # fallback: XXYY query_token
-                if entry_price <= 0:
-                    token_data = await client.query_token(
-                        record.signal.token_address, record.signal.chain
-                    )
-                    trade_info = token_data.get("tradeInfo") or {} if isinstance(token_data, dict) else {}
-                    entry_price = float(trade_info.get("price") or 0)
+                # 不再 fallback 到 query_token（USD 计价会导致单位混乱）
                 if entry_price <= 0:
                     if attempt < self.REGISTER_RETRY_MAX:
                         logger.warning(
