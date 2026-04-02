@@ -230,7 +230,7 @@ class TradingEngine:
             hit_info = self._signal_hits.get(signal.token_address)
             signal_count = len(hit_info["sources"]) if hit_info else 1
 
-            amount = self._calc_buy_amount(analysis.score, sol_balance, signal_count)
+            amount = round(self._calc_buy_amount(analysis.score, sol_balance, signal_count), 4)  # XXYY 不接受浮点尾数
 
             # ── 安全护栏检查 ──────────────────────────────
             open_count = len([p for p in self.position_monitor.positions if p.status != "closed"])

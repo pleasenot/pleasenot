@@ -317,7 +317,9 @@ class XxyyClient:
         swap_client = self._swap_clients[self._swap_idx % len(self._swap_clients)]
         self._swap_idx += 1
         try:
+            logger.info("swap request: key=%s body=%s", swap_client.headers.get("authorization","")[:25], {k:v for k,v in body.items() if k != 'walletAddress'})
             resp = await swap_client.post(f"{PREFIX}/swap", json=body)
+            logger.info("swap response: HTTP=%d body=%s", resp.status_code, resp.text[:150])
             result = self._parse(resp)
             if isinstance(result, dict):
                 tx_id = result.get("signature") or result.get("txId")
