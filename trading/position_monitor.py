@@ -196,6 +196,11 @@ class PositionMonitor:
         self._running = False
 
     async def _check_all(self) -> None:
+        # 定期清理内存中的 closed 持仓（防止无限增长）
+        closed_count = sum(1 for p in self._positions if p.status == "closed")
+        if closed_count > 50:
+            self._positions = [p for p in self._positions if p.status != "closed"]
+            logger.debug("清理 %d 个 closed 持仓", closed_count)
         open_positions = [p for p in self._positions if p.status != "closed"]
         for pos in open_positions:
             try:
@@ -239,8 +244,9 @@ class PositionMonitor:
                         if qt.get("address") in sol_mints or qt.get("symbol") in ("SOL", "WSOL"):
                             sol_pair = p
                             break
-                    pair = sol_pair or pairs[0]
-                    native = float(pair.get("priceNative", 0) or 0)
+                    if not sol_pair:
+                        return 0.0  # 没有 SOL pair，跳过而不是用错误单位
+                    native = float(sol_pair.get("priceNative", 0) or 0)
                     if native > 0:
                         return native
         except Exception:
@@ -261,7 +267,7 @@ class PositionMonitor:
         trade_info = data.get("tradeInfo") or {}
 
         # 待定价格补偿
-        if pos.entry_price < 0:
+        if pos.entry_price <= 0:
             pos.entry_price = current_price
             logger.info("🔧 补偿入场价格 ca=%s entry=%.10f", pos.token_address, current_price)
             self.save_positions()

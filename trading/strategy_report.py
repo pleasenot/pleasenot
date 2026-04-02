@@ -458,8 +458,7 @@ class StrategyReporter:
                         qt = p.get("quoteToken") or {}
                         if qt.get("address") in sol_mints or qt.get("symbol") in ("SOL", "WSOL"):
                             return float(p.get("priceNative", 0) or 0)
-                    if pairs:
-                        return float(pairs[0].get("priceNative", 0) or 0)
+                    # 没有 SOL pair 就返回 0（不用错误单位的价格）
         except Exception:
             pass
         return 0.0
