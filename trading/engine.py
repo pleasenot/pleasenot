@@ -259,6 +259,9 @@ class TradingEngine:
                            (isinstance(e, XxyyAPIError) and e.code == 8054))
             if is_buy and not is_transient:
                 self.safety.record_failure()
+            # 8054 的币加入拒绝缓存，不再重复尝试
+            if is_buy and isinstance(e, XxyyAPIError) and e.code == 8054:
+                self._rejected_cache.add(signal.token_address)
             return None
 
         # swap 提交成功，轮询链上结果
