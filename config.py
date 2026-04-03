@@ -19,11 +19,13 @@ class Config:
     # 默认交易链
     default_chain: str = field(default_factory=lambda: os.getenv("DEFAULT_CHAIN", "sol"))
 
-    # 默认钱包地址（买入时需要）
+    # 钱包地址
     wallet_address: str = field(default_factory=lambda: os.getenv("WALLET_ADDRESS", ""))
+    bsc_wallet_address: str = field(default_factory=lambda: os.getenv("BSC_WALLET_ADDRESS", ""))
 
-    # 买入金额（原生币，如 0.1 SOL）
+    # 买入金额
     buy_amount: float = field(default_factory=lambda: float(os.getenv("BUY_AMOUNT", "0.1")))
+    bsc_buy_amount: float = field(default_factory=lambda: float(os.getenv("BSC_BUY_AMOUNT", "0.001")))
 
     # 卖出比例（1-100%）
     sell_percent: int = field(default_factory=lambda: int(os.getenv("SELL_PERCENT", "100")))

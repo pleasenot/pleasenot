@@ -128,6 +128,22 @@ async def run(feed_only: bool = False, dry_run: bool = False) -> None:
     trending = TrendingScanner(chain=config.default_chain, interval=60, period="5M", max_signals_per_cycle=2)
     tasks.append(asyncio.create_task(trending.start(handle)))
 
+    # ── BSC 链扫描器（如果配了 BSC 钱包）──
+    if config.bsc_wallet_address:
+        bsc_kol = KolBuyScanner(chain="bsc", interval=45, max_signals_per_cycle=2)
+        tasks.append(asyncio.create_task(bsc_kol.start(handle)))
+
+        bsc_smart = SmartMoneyScanner(chain="bsc", interval=45, max_signals_per_cycle=2)
+        tasks.append(asyncio.create_task(bsc_smart.start(handle)))
+
+        bsc_trending = TrendingScanner(chain="bsc", interval=60, period="5M", max_signals_per_cycle=2)
+        tasks.append(asyncio.create_task(bsc_trending.start(handle)))
+
+        bsc_feed = FeedScanner(chain="bsc", feed_type="NEW", filters=TIER_A_FILTERS, interval=30, max_signals_per_cycle=2)
+        tasks.append(asyncio.create_task(bsc_feed.start(handle)))
+
+        logger.info("BSC 链扫描已启动，钱包: %s", config.bsc_wallet_address[:12])
+
     # 仓位监控（止盈）+ 策略报告 + 交易复盘
     if not dry_run:
         # 启动前从 positions.json 恢复持仓

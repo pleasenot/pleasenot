@@ -211,9 +211,13 @@ class TradingEngine:
                 self.reporter.record_signal(signal.source, passed=True, score=analysis.score)
 
         if is_buy:
-            # ── 查询钱包余额（用于动态仓位计算 + 安全检查）───
+            # ── 根据链选择钱包和金额 ───
+            wallet = self.wallet_address
+            if signal.chain == "bsc" and config.bsc_wallet_address:
+                wallet = config.bsc_wallet_address
+
             try:
-                wallet_info = await client.wallet_info(self.wallet_address, signal.chain)
+                wallet_info = await client.wallet_info(wallet, signal.chain)
                 sol_balance = float(
                     (wallet_info or {}).get("balance", 0)
                     or (wallet_info or {}).get("solBalance", 0)
@@ -244,13 +248,15 @@ class TradingEngine:
         # ── 执行 swap（不重试，让 5s 节流生效，快速跳到下一个新鲜币）──
         try:
             async with self._swap_lock:
+                # BSC 用不同的 tip (Gwei) 和钱包
+                tip = 1.0 if signal.chain == "bsc" else self.tip
                 tx_id = await client.swap(
                     chain=signal.chain,
-                    wallet_address=self.wallet_address,
+                    wallet_address=wallet if is_buy else self.wallet_address,
                     token_address=signal.token_address,
                     is_buy=is_buy,
                     amount=amount,
-                    tip=self.tip,
+                    tip=tip,
                 )
         except (XxyyAPIError, httpx.HTTPStatusError) as e:
             logger.error("swap 失败 ca=%s error=%s", signal.token_address, e)

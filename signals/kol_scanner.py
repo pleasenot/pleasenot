@@ -21,15 +21,17 @@ class KolBuyScanner(BaseSignalSource):
         chain: str | None = None,
         interval: int = 30,
         max_signals_per_cycle: int = 2,
-        min_kol_count: int = 1,        # 至少几个 KOL 买入才触发
-        min_market_cap: float = 2000,   # 最低市值 USD
+        min_kol_count: int = 1,
+        min_market_cap: float = 10000,  # 延迟跟单：市值 ≥ $10k 才买（KOL 买了但没起来的不跟）
     ):
         self.chain = chain or config.default_chain
         self.interval = interval
         self.max_signals_per_cycle = max_signals_per_cycle
         self.min_kol_count = min_kol_count
         self.min_market_cap = min_market_cap
-        self._seen = TTLSet(ttl=1800)  # 30分钟去重
+        self._seen = TTLSet(ttl=1800)
+        # 观察池：KOL 买了但市值还不够的币，等市值涨上来再买
+        self._watching: dict[str, dict] = {}  # {ca: token_data}
 
     async def start(self, on_signal: Callable[[TradeSignal], None]) -> None:
         logger.info(
@@ -56,12 +58,17 @@ class KolBuyScanner(BaseSignalSource):
                         continue
 
                     mc = float(token.get("marketCap", 0) or 0)
-                    if mc < self.min_market_cap:
-                        continue
                     if mc > 500_000:
+                        continue
+                    if mc < self.min_market_cap:
+                        # 延迟跟单：市值不够的放入观察池
+                        if ca not in self._watching:
+                            self._watching[ca] = token
+                            logger.debug("KOL观察 ca=%s mc=$%.0f (等市值>$%.0f)", ca[:12], mc, self.min_market_cap)
                         continue
 
                     self._seen.add(ca)
+                    self._watching.pop(ca, None)  # 从观察池移除
 
                     symbol = (token.get("tokenMeta") or {}).get("symbol", "?")
                     holders = token.get("holder", 0)
@@ -89,6 +96,37 @@ class KolBuyScanner(BaseSignalSource):
                     else:
                         on_signal(signal)
                     triggered += 1
+
+                # 检查观察池：之前市值不够的币现在涨上来了吗
+                for watch_ca in list(self._watching.keys()):
+                    if triggered >= self.max_signals_per_cycle:
+                        break
+                    if watch_ca in self._seen:
+                        self._watching.pop(watch_ca, None)
+                        continue
+                    # 从本轮数据里找这个币的最新市值
+                    updated = next((t for t in tokens if (t.get("tokenMeta") or {}).get("mint") == watch_ca), None)
+                    if updated:
+                        new_mc = float(updated.get("marketCap", 0) or 0)
+                        if new_mc >= self.min_market_cap:
+                            self._seen.add(watch_ca)
+                            self._watching.pop(watch_ca, None)
+                            symbol = (updated.get("tokenMeta") or {}).get("symbol", "?")
+                            kol_count = updated.get("walletBuyCnt", 0)
+                            logger.info("KOL延迟跟单 ca=%s symbol=%s mc=$%.0f (从观察池升级)", watch_ca[:12], symbol, new_mc)
+                            signal = TradeSignal(chain=self.chain, token_address=watch_ca, action="buy",
+                                                source="kol_delay", reason=f"KOL延迟跟单x{kol_count} mc=${new_mc:.0f}")
+                            if asyncio.iscoroutinefunction(on_signal):
+                                await on_signal(signal)
+                            else:
+                                on_signal(signal)
+                            triggered += 1
+
+                # 清理观察池中超过 30 分钟的
+                import time as _time
+                now = _time.time()
+                self._watching = {k: v for k, v in self._watching.items()
+                                  if now - (v.get("_watch_time") or now) < 1800}
 
             except Exception as e:
                 logger.error("KolBuyScanner error: %s", e)
