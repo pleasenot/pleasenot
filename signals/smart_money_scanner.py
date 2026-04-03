@@ -22,7 +22,7 @@ class SmartMoneyScanner(BaseSignalSource):
         interval: int = 30,
         max_signals_per_cycle: int = 2,
         min_wallet_count: int = 1,      # 至少几个聪明钱买入
-        min_market_cap: float = 10000,  # 延迟跟单：市值 ≥ $10k 才买
+        min_market_cap: float = 2000,   # 市值 ≥ $2k 才买
     ):
         self.chain = chain or config.default_chain
         self.interval = interval

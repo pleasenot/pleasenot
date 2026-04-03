@@ -22,7 +22,7 @@ class KolBuyScanner(BaseSignalSource):
         interval: int = 30,
         max_signals_per_cycle: int = 2,
         min_kol_count: int = 1,
-        min_market_cap: float = 10000,  # 延迟跟单：市值 ≥ $10k 才买（KOL 买了但没起来的不跟）
+        min_market_cap: float = 2000,   # 市值 ≥ $2k 才买
     ):
         self.chain = chain or config.default_chain
         self.interval = interval
