@@ -178,7 +178,8 @@ def main():
         # 守护模式：自己管理自己，无限重启
         import time
         import signal
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)  # 忽略 SIGHUP
+        if hasattr(signal, 'SIGHUP'):
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)  # Linux: 忽略 SIGHUP
 
         while True:
             logger.info("[DAEMON] Bot 启动...")
