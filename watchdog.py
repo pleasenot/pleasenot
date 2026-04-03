@@ -2,17 +2,23 @@
 极简 watchdog：每 30 秒检查 bot 是否存活，不在就拉起来。
 自身占用极低（几MB内存），独立于 bot 运行。
 
-用法: nohup python3 watchdog.py &
+用法:
+  Linux:   nohup python3 watchdog.py &
+  Windows: start /b python watchdog.py
 """
 import subprocess
+import sys
 import time
 import os
 import signal
+import platform
 
-signal.signal(signal.SIGHUP, signal.SIG_IGN)
+if hasattr(signal, 'SIGHUP'):
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
 
-BOT_CMD = ["python3", "main.py", "--daemon"]
-WORK_DIR = "/home/user/pleasenot"
+IS_WINDOWS = platform.system() == "Windows"
+PYTHON = sys.executable
+WORK_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG = os.path.join(WORK_DIR, "bot_daemon.log")
 CHECK_INTERVAL = 30
 
@@ -27,11 +33,18 @@ def log(msg):
 def is_bot_running():
     """检查 bot 进程是否在跑"""
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", "python3 main.py --daemon"],
-            capture_output=True, text=True,
-        )
-        return result.returncode == 0
+        if IS_WINDOWS:
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                capture_output=True, text=True,
+            )
+            return "main.py" in result.stdout or "python" in result.stdout.lower()
+        else:
+            result = subprocess.run(
+                ["pgrep", "-f", "python.*main.py.*--daemon"],
+                capture_output=True, text=True,
+            )
+            return result.returncode == 0
     except Exception:
         return False
 
@@ -39,13 +52,19 @@ def is_bot_running():
 def start_bot():
     """拉起 bot"""
     bot_log = open(os.path.join(WORK_DIR, "bot.log"), "a")
+    kwargs = {}
+    if not IS_WINDOWS:
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
     proc = subprocess.Popen(
-        BOT_CMD,
+        [PYTHON, "main.py", "--daemon"],
         cwd=WORK_DIR,
         stdout=bot_log,
         stderr=bot_log,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
+        **kwargs,
     )
     log(f"Bot 已拉起 PID={proc.pid}")
     return proc.pid

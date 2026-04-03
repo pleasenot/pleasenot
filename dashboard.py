@@ -102,15 +102,21 @@ def tail_bot_log(n: int = 15) -> list[str]:
 
 
 def check_bot_process() -> str:
-    """检查 bot 进程是否运行"""
+    """检查 bot 进程是否运行（兼容 Windows/Linux）"""
     try:
-        import subprocess
-        result = subprocess.run(
-            ["pgrep", "-f", "main.py.*--daemon"],
-            capture_output=True, text=True,
-        )
-        pids = result.stdout.strip().split("\n")
-        pids = [p for p in pids if p]
+        import subprocess, platform
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                ["wmic", "process", "where", "commandline like '%main.py%--daemon%'", "get", "processid"],
+                capture_output=True, text=True,
+            )
+            pids = [p.strip() for p in result.stdout.split("\n") if p.strip().isdigit()]
+        else:
+            result = subprocess.run(
+                ["pgrep", "-f", "main.py.*--daemon"],
+                capture_output=True, text=True,
+            )
+            pids = [p for p in result.stdout.strip().split("\n") if p]
         if pids:
             return f"[green]运行中[/] PID:{pids[0]}"
         return "[red]未运行[/]"
