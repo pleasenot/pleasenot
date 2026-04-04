@@ -691,7 +691,14 @@ class PositionMonitor:
         try:
             with open(tmp_file, "w") as f:
                 json.dump(data, f, indent=2)
-            os.replace(tmp_file, self.SAVE_FILE)  # 原子操作
+            # Windows 上 os.replace 可能因文件被占用失败，加重试
+            for _retry in range(3):
+                try:
+                    os.replace(tmp_file, self.SAVE_FILE)
+                    break
+                except PermissionError:
+                    import time as _t
+                    _t.sleep(0.1)
         except Exception as e:
             logger.error("保存持仓失败: %s", e)
             return

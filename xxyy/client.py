@@ -118,9 +118,15 @@ class APIHealthMonitor:
 # 全局健康监测实例
 api_health = APIHealthMonitor()
 
-# 全局 swap 暂停锁：swap 执行时其他所有 XXYY 请求暂停
-_swap_pause = asyncio.Event()
-_swap_pause.set()  # 默认不暂停
+# 全局 swap 暂停锁（懒加载，防 Windows 无 event loop 时挂死）
+_swap_pause: asyncio.Event | None = None
+
+def _get_swap_pause() -> asyncio.Event:
+    global _swap_pause
+    if _swap_pause is None:
+        _swap_pause = asyncio.Event()
+        _swap_pause.set()
+    return _swap_pause
 
 
 class XxyyClient:
@@ -159,7 +165,7 @@ class XxyyClient:
     async def _wait_throttle(self) -> None:
         """全局请求节流"""
         if not self._skip_swap_pause:
-            await _swap_pause.wait()  # 只阻塞共享 key 的 client
+            await _get_swap_pause().wait()  # 只阻塞共享 key 的 client
         while True:
             async with self._throttle:
                 now = time.monotonic()
@@ -313,7 +319,7 @@ class XxyyClient:
         if priority_fee is not None and chain == "sol":
             body["priorityFee"] = priority_fee
         # swap 前暂停所有查询请求，确保 swap 独占 XXYY 服务端配额
-        _swap_pause.clear()  # 暂停所有查询
+        _get_swap_pause().clear()  # 暂停所有查询
         await asyncio.sleep(2)  # 等待进行中的查询完成
 
         swap_client = self._swap_clients[self._swap_idx % len(self._swap_clients)]
@@ -330,7 +336,7 @@ class XxyyClient:
             logger.info("swap submitted txId=%s buy=%s ca=%s", tx_id, is_buy, token_address)
             return tx_id
         finally:
-            _swap_pause.set()  # 无论成功失败，恢复查询
+            _get_swap_pause().set()  # 无论成功失败，恢复查询
 
     async def get_trade(self, tx_id: str) -> dict:
         return await self._get("/trade", txId=tx_id)

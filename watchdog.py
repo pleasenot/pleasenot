@@ -35,10 +35,13 @@ def is_bot_running():
     try:
         if IS_WINDOWS:
             result = subprocess.run(
-                ["tasklist", "/FI", "IMAGENAME eq python.exe", "/FO", "CSV"],
+                ["wmic", "process", "where",
+                 "commandline like '%main.py%--daemon%'",
+                 "get", "processid"],
                 capture_output=True, text=True,
             )
-            return "main.py" in result.stdout or "python" in result.stdout.lower()
+            pids = [p.strip() for p in result.stdout.split("\n") if p.strip().isdigit()]
+            return len(pids) > 0
         else:
             result = subprocess.run(
                 ["pgrep", "-f", "python.*main.py.*--daemon"],
@@ -51,23 +54,24 @@ def is_bot_running():
 
 def start_bot():
     """拉起 bot"""
-    bot_log = open(os.path.join(WORK_DIR, "bot.log"), "a")
+    bot_log_path = os.path.join(WORK_DIR, "bot.log")
     kwargs = {}
     if not IS_WINDOWS:
         kwargs["start_new_session"] = True
     else:
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-    proc = subprocess.Popen(
-        [PYTHON, "main.py", "--daemon"],
-        cwd=WORK_DIR,
-        stdout=bot_log,
-        stderr=bot_log,
-        stdin=subprocess.DEVNULL,
-        **kwargs,
-    )
-    log(f"Bot 已拉起 PID={proc.pid}")
-    return proc.pid
+    with open(bot_log_path, "a") as bot_log:
+        proc = subprocess.Popen(
+            [PYTHON, "main.py", "--daemon"],
+            cwd=WORK_DIR,
+            stdout=bot_log,
+            stderr=bot_log,
+            stdin=subprocess.DEVNULL,
+            **kwargs,
+        )
+        log(f"Bot 已拉起 PID={proc.pid}")
+        return proc.pid
 
 
 if __name__ == "__main__":
