@@ -25,19 +25,16 @@ logger = get_logger(__name__)
 PRICE_CHECK_INTERVAL = 15  # 每 15 秒查一轮价格（meme 币波动快，要快速捕捉止盈点）
 
 # ── 止盈阶梯 ─────────────────────────────────────────────
-# 核心逻辑：土狗赚钱靠一笔 10x-100x 覆盖所有亏损
-# 不要急着跑，让利润奔跑！
-# (倍数阈值, 卖出百分比, 描述)
+# 简化版：+100% 卖一半回本，剩余让利润奔跑
 TAKE_PROFIT_LEVELS = [
-    (2.0,  30, "2x翻倍减仓30%"),    # 翻倍只减30%，保留大头
-    (3.0,  20, "3x再锁20%"),        # 3倍锁一波，防止回吐
-    (5.0,  20, "5x锁利润"),         # 5倍再卖20%
-    (10.0, 30, "10x大肉落袋"),      # 10倍卖30%
-    (50.0, 50, "50x半仓落袋"),      # 50倍卖一半，剩下留着博百倍
+    (2.0,  50, "2x回本卖一半"),      # 翻倍回本，剩余零成本持有
+    (5.0,  30, "5x锁利润"),          # 5倍再卖30%
+    (10.0, 50, "10x半仓落袋"),       # 10倍卖一半
+    (50.0, 50, "50x大肉落袋"),       # 50倍再卖一半，剩下留着
 ]
 
 # ── 移动止盈 ─────────────────────────────────────────────
-TRAILING_STOP_DROP = 0.30       # 从最高点回撤30%才触发（给波动空间）
+TRAILING_STOP_DROP = 0.40       # 从最高点回撤40%才触发（给更多空间）
 TRAILING_SELL_PERCENT = 100     # 移动止盈触发后全部卖出
 
 # ── 时间止损 ─────────────────────────────────────────────
@@ -50,7 +47,7 @@ VOLUME_DROP_THRESHOLD = 0.3     # 成交量降至30%以下才触发（从50%放�
 HOLDER_DROP_THRESHOLD = 0.8     # 持仓人降至80%以下（从90%放宽）
 
 # ── 破位止损 ─────────────────────────────────────────────
-CRASH_STOP_MULTIPLIER = 0.50    # 跌破入场价50%止损（从35%收紧，及早割肉减少损失）
+CRASH_STOP_MULTIPLIER = 0.20    # 跌到入场价20%才止损（给足反弹空间，meme币波动大）
 CRASH_STOP_SELL_PERCENT = 100
 
 # ── 死币自动清理 ─────────────────────────────────────────
@@ -323,13 +320,10 @@ class PositionMonitor:
                 pos.initial_holders = holders
                 pos.volume_recorded = True
 
-        # ── 策略4: 动量衰退 ──────────────────────────────
-        current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
-        current_holders = int(trade_info.get("holder", 0) or 0)
-        await self._check_momentum(pos, current_volume, current_holders, multiplier)
-
-        if pos.status == "closed":
-            return
+        # ── 策略4: 动量衰退（已禁用，meme 币波动大是正常的）──
+        # current_volume = float(trade_info.get("hourTradeVolume", 0) or 0)
+        # current_holders = int(trade_info.get("holder", 0) or 0)
+        # await self._check_momentum(pos, current_volume, current_holders, multiplier)
 
         # ── 策略6: 死币自动清理 ──────────────────────────
         await self._check_dead_coin(pos, trade_info, multiplier)
@@ -337,8 +331,8 @@ class PositionMonitor:
         if pos.status == "closed":
             return
 
-        # ── 策略7: AI 持续分析（MiniMax M2.7）─────────────
-        await self._check_ai_holding(pos, data, trade_info, multiplier)
+        # ── 策略7: AI 持续分析（已禁用，multiplier 单位问题导致大量误杀）──
+        # await self._check_ai_holding(pos, data, trade_info, multiplier)
 
     # ── 策略1: 分批止盈 ──────────────────────────────────
 
