@@ -109,7 +109,10 @@ class TokenAnalyzer:
         # ── 5b. 社交信号（本地检查，不需要额外 API）─────
         self._check_socials(link_info, data, result)
 
-        # ── 6. AI 智能研判（MiniMax）— 过滤垃圾币提高胜率 ──
+        # ── 6. 聪明钱信号（从 query_token 数据提取，不额外调 API）──
+        self._check_smart_money_from_data(data, result)
+
+        # ── 7. AI 智能研判（MiniMax）— 过滤垃圾币提高胜率 ──
         await self._check_ai_verdict(data, link_info, result)
 
         # 封顶 100 分，防止高分失去区分度
@@ -409,7 +412,43 @@ class TokenAnalyzer:
             result.score += 0
             result.reasons.append("+0 无社交信息")
 
-    # ── 聪明钱信号 ──────────────────────────────────────────
+    # ── 聪明钱信号（从 query_token 数据提取）──────────────────
+
+    def _check_smart_money_from_data(self, data: dict, result: AnalysisResult) -> None:
+        """
+        从 query_token 或 trending 数据里提取聪明钱信息。
+        Skill 模式：trending 数据带 smartWallets 字段，不需要额外 API。
+        """
+        # 方式1：trending 数据里的 smartWallets
+        smart_wallets = data.get("smartWallets") or {}
+        sm_total = int(smart_wallets.get("total", 0) or 0)
+        records = smart_wallets.get("records") or []
+
+        # 方式2：query_token 的 topHolderList 里找大户
+        if sm_total == 0:
+            top_holders = data.get("topHolderList") or []
+            # 持仓 > 5% 的大户算聪明钱
+            big_holders = [h for h in top_holders if float(h.get("pct", 0) or 0) >= 5]
+            sm_total = len(big_holders)
+
+        if sm_total >= 5:
+            result.score += 15
+            result.reasons.append(f"+15 聪明钱强信号({sm_total}个)")
+        elif sm_total >= 3:
+            result.score += 10
+            result.reasons.append(f"+10 聪明钱关注({sm_total}个)")
+        elif sm_total >= 1:
+            buy_count = sum(1 for r in records if (r.get("action") or "").lower() in ("buy", "bought"))
+            if buy_count > 0:
+                result.score += 8
+                result.reasons.append(f"+8 聪明钱买入({sm_total}个,买{buy_count}笔)")
+            else:
+                result.score += 5
+                result.reasons.append(f"+5 有聪明钱关注({sm_total}个)")
+        else:
+            result.reasons.append("+0 无聪明钱数据")
+
+    # ── 聪明钱信号（旧版，需要额外 API 调用）──────────────────
 
     async def _check_smart_money(self, token_address: str, chain: str, result: AnalysisResult) -> None:
         """
