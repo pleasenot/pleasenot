@@ -331,6 +331,12 @@ class TradingEngine:
 
     async def _register_position(self, record: TradeRecord) -> None:
         """买入成功后计算 SOL 计价入场价，登记仓位。"""
+        # 根据链选择正确的钱包和 tip（在 try 外定义，防异常时未定义）
+        pos_wallet = self.wallet_address
+        pos_tip = self.tip
+        if record.signal.chain == "bsc" and config.bsc_wallet_address:
+            pos_wallet = config.bsc_wallet_address
+            pos_tip = 1.0
         for attempt in range(1, self.REGISTER_RETRY_MAX + 1):
             try:
                 # 优先从交易结果算入场价（SOL计价）：买入SOL / 获得代币数
@@ -380,16 +386,12 @@ class TradingEngine:
                         record.signal.token_address,
                     )
                     entry_price = -1.0
-                # 根据链选择正确的钱包
-                pos_wallet = self.wallet_address
-                if record.signal.chain == "bsc" and config.bsc_wallet_address:
-                    pos_wallet = config.bsc_wallet_address
                 pos = Position(
                     chain=record.signal.chain,
                     token_address=record.signal.token_address,
                     wallet_address=pos_wallet,
                     entry_price=entry_price,
-                    tip=1.0 if record.signal.chain == "bsc" else self.tip,
+                    tip=pos_tip,
                     buy_amount=record.buy_amount,
                 )
                 self.position_monitor.add(pos)
@@ -412,7 +414,7 @@ class TradingEngine:
                         token_address=record.signal.token_address,
                         wallet_address=pos_wallet,
                         entry_price=-1.0,
-                        tip=self.tip,
+                        tip=pos_tip,
                         buy_amount=record.buy_amount,
                     )
                     self.position_monitor.add(pos)
