@@ -63,6 +63,8 @@ class KolBuyScanner(BaseSignalSource):
                     if mc < self.min_market_cap:
                         # 延迟跟单：市值不够的放入观察池
                         if ca not in self._watching:
+                            import time as _t
+                            token["_watch_time"] = _t.time()
                             self._watching[ca] = token
                             logger.debug("KOL观察 ca=%s mc=$%.0f (等市值>$%.0f)", ca[:12], mc, self.min_market_cap)
                         continue

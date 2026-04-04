@@ -380,12 +380,16 @@ class TradingEngine:
                         record.signal.token_address,
                     )
                     entry_price = -1.0
+                # 根据链选择正确的钱包
+                pos_wallet = self.wallet_address
+                if record.signal.chain == "bsc" and config.bsc_wallet_address:
+                    pos_wallet = config.bsc_wallet_address
                 pos = Position(
                     chain=record.signal.chain,
                     token_address=record.signal.token_address,
-                    wallet_address=self.wallet_address,
+                    wallet_address=pos_wallet,
                     entry_price=entry_price,
-                    tip=self.tip,
+                    tip=1.0 if record.signal.chain == "bsc" else self.tip,
                     buy_amount=record.buy_amount,
                 )
                 self.position_monitor.add(pos)
@@ -406,7 +410,7 @@ class TradingEngine:
                     pos = Position(
                         chain=record.signal.chain,
                         token_address=record.signal.token_address,
-                        wallet_address=self.wallet_address,
+                        wallet_address=pos_wallet,
                         entry_price=-1.0,
                         tip=self.tip,
                         buy_amount=record.buy_amount,
