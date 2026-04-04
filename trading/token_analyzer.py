@@ -109,8 +109,8 @@ class TokenAnalyzer:
         # ── 5b. 社交信号（本地检查，不需要额外 API）─────
         self._check_socials(link_info, data, result)
 
-        # 动量检测 / 聪明钱 / AI 研判 移到买入后由 position_monitor 执行
-        # 打新要快，买入前只做安全 + 筹码 + 流动性 + 市值 + 热度 + 社交
+        # ── 6. AI 智能研判（MiniMax）— 过滤垃圾币提高胜率 ──
+        await self._check_ai_verdict(data, link_info, result)
 
         # 封顶 100 分，防止高分失去区分度
         result.score = min(result.score, 100)
